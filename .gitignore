@@ -1,5 +1,6 @@
 /.venv
 /.streamlit/secrets.toml
 /chat_history.db
+*/__pycache__/*
 */__pycache__
 /__pycache__
