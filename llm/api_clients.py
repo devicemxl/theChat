@@ -77,7 +77,7 @@ Responde de manera clara, concisa y precisa."""
 def stream_deepseek_completion(
     messages: List[Dict],
     api_key: str,
-    model: str = "deepseek-chat",
+    model: str = "deepseek-v4-pro",
 ) -> Generator[str, None, None]:
     """Streaming para la API de DeepSeek."""
     headers = {
