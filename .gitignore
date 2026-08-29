@@ -1,7 +1,7 @@
-/.venv
-/.streamlit/secrets.toml
-/chat_history.db
-/llm/__pycache__/*
-/ui/__pycache__/*
-/utils/__pycache__/*
-/__pycache__/*
+.venv/
+.streamlit/secrets.toml
+chat_history.db
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
