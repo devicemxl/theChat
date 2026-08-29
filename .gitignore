@@ -1,4 +1,4 @@
 /.venv
-/.streamlit
+/.streamlit/secrets.toml
 /chat_history.db
 /__pycache__

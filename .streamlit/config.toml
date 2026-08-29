@@ -1,0 +1,16 @@
+# .streamlit/config.toml
+[theme]
+primaryColor = "#3d7af5"
+backgroundColor = "hsl(220, 60%, 95%)"
+secondaryBackgroundColor = "hsl(221, 61%, 92.5%)"
+
+[server]
+maxUploadSize = 200
+enableXsrfProtection = true
+chatDatabase = "chat_history.db"
+
+[browser]
+gatherUsageStats = false
+
+[titles]
+appTile = "theChat"
