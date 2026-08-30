@@ -15,13 +15,6 @@ from utils.data_export import (
 
 # ========== UTILIDADES DE ESTADO ==========
 
-def get_secret(key: str) -> str:
-    """Intenta obtener un secreto de forma segura desde los secrets de Streamlit."""
-    try:
-        return st.secrets[key] if key in st.secrets else ""
-    except Exception:
-        return ""
-
 def init_database():
     """Inicializa la base de datos y todas las variables de estado (session_state)"""
     if "db" not in st.session_state:
@@ -211,35 +204,6 @@ def view_conversation_history():
                     delete_conversation(conv['id'])
                     st.rerun()
 
-def configure_api_key():
-    """Configura el Proveedor y la API key desde la interfaz"""
-    proveedores = ["DeepSeek", "Google AI Studio (Gemini)", "Mistral AI"]
-
-    nuevo_proveedor = st.selectbox(
-        "Proveedor de IA",
-        proveedores,
-        index=proveedores.index(st.session_state.api_provider) if st.session_state.api_provider in proveedores else 0
-    )
-
-    if nuevo_proveedor != st.session_state.api_provider:
-        st.session_state.api_provider = nuevo_proveedor
-        st.rerun()
-        
-    if st.session_state.api_provider == "DeepSeek":
-        key_input = get_secret("DEEPSEEK_API_KEY")
-        st.session_state.deepseek_api_key = key_input
-        st.session_state.api_key = key_input
-
-    elif st.session_state.api_provider == "Google AI Studio (Gemini)":
-        key_input = get_secret("GEMINI_API_KEY")
-        st.session_state.gemini_api_key = key_input
-        st.session_state.api_key = key_input
-
-    elif st.session_state.api_provider == "Mistral AI":
-        key_input = get_secret("MISTRAL_API_KEY")
-        st.session_state.mistral_api_key = key_input
-        st.session_state.api_key = key_input
-
 def render_sidebar():
     """Renderiza toda la barra lateral visualmente"""
     with st.sidebar:
@@ -284,6 +248,3 @@ def render_sidebar():
                 st.metric("Con truncamiento", stats["conversations_with_truncation"])
 
         st.divider()
-
-        with st.expander("⚙️ API / Proveedor"):
-            configure_api_key()

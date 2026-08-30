@@ -14,13 +14,100 @@ from llm.api_clients import (
     stream_gemini_completion
 )
 
+def displayMSGx(msg):
+    st.info(msg)
+
+def get_secret(key: str) -> str:
+    """Intenta obtener un secreto de forma segura desde los secrets de Streamlit."""
+    try:
+        return st.secrets[key] if key in st.secrets else ""
+    except Exception:
+        return ""
+
+# --- Funciones auxiliares (colocar al inicio, después de imports) ---
+
+def get_effort_params(provider: str, effort: str) -> dict:
+    """Devuelve los parámetros específicos para el proveedor según el esfuerzo."""
+    if provider == "DeepSeek":
+        # DeepSeek espera reasoning_effort como string: "bajo", "medio", "alto"
+        # El mapeo a inglés se hará dentro de la función de streaming
+        return {"reasoning_effort": effort}
+    elif provider == "Google AI Studio (Gemini)":
+        temp_map = {"bajo": 0.3, "medio": 0.7, "alto": 1.0}
+        return {"temperature": temp_map.get(effort, 0.7)}
+    elif provider == "Mistral AI":
+        temp_map = {"bajo": 0.3, "medio": 0.7, "alto": 1.0}
+        return {"temperature": temp_map.get(effort, 0.7)}
+    else:
+        return {}
+
+def configure_model_effort():
+    """Configura el esfuerzo del modelo desde la interfaz."""
+    esfuerzo = ["bajo", "medio", "alto"]
+    # Inicializar si no existe
+    if "api_brainer" not in st.session_state:
+        st.session_state.api_brainer = "medio"
+    nuevo_esfuerzo = st.selectbox(
+        "Esfuerzo del modelo",
+        esfuerzo,
+        index=esfuerzo.index(st.session_state.api_brainer) if st.session_state.api_brainer in esfuerzo else 1
+    )
+    if nuevo_esfuerzo != st.session_state.api_brainer:
+        st.session_state.api_brainer = nuevo_esfuerzo
+        st.rerun()
+    # Solo guardamos el string, no sobrescribimos con números
+
+def configure_api_key():
+    """Configura el Proveedor y la API key desde la interfaz"""
+    proveedores = ["DeepSeek", "Google AI Studio (Gemini)", "Mistral AI"]
+
+    nuevo_proveedor = st.selectbox(
+        "Proveedor de IA",
+        proveedores,
+        index=proveedores.index(st.session_state.api_provider) if st.session_state.api_provider in proveedores else 0
+    )
+
+    if nuevo_proveedor != st.session_state.api_provider:
+        st.session_state.api_provider = nuevo_proveedor
+        st.rerun()
+        
+    if st.session_state.api_provider == "DeepSeek":
+        key_input = get_secret("DEEPSEEK_API_KEY")
+        st.session_state.deepseek_api_key = key_input
+        st.session_state.api_key = key_input
+
+    elif st.session_state.api_provider == "Google AI Studio (Gemini)":
+        key_input = get_secret("GEMINI_API_KEY")
+        st.session_state.gemini_api_key = key_input
+        st.session_state.api_key = key_input
+
+    elif st.session_state.api_provider == "Mistral AI":
+        key_input = get_secret("MISTRAL_API_KEY")
+        st.session_state.mistral_api_key = key_input
+        st.session_state.api_key = key_input
+
+
 def main():
+
+    msgX = "Enjoy It"
+
+    if "agent_mode" not in st.session_state:
+        st.session_state.agent_mode = "chat"
+    if st.session_state.agent_mode == "code":
+        msgX = "Modo Code activado: el asistente podrá explorar y modificar archivos (con restricciones)."
+    if "api_brainer" not in st.session_state:
+        st.session_state.api_brainer = "medio"
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 0
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
     # 1. Configuración de página y estilos
     st.set_page_config(
         page_title="💬 Multi-IA Chat",
         page_icon="💬",
         layout="wide",
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="collapsed"
     )
     load_custom_css()
 
@@ -28,16 +115,51 @@ def main():
     init_database()
     render_sidebar()
 
-    st.header("", divider="rainbow")
-
     # 3. Acciones contextuales (Botón Limpiar)
-    with st.container():
-        st.caption(f"Conversación #{st.session_state.current_conversation_id} | Mensajes: {len(st.session_state.messages)} | Reformulaciones: {st.session_state.total_reformulations} | Provider: {st.session_state.api_provider}")
-        col1, col2 = st.columns([6, 1])
-        with col2:
-            if st.button("🗑️ Limpiar"):
+    with st.expander(label=f"Conversación #{st.session_state.current_conversation_id} | Mensajes: {len(st.session_state.messages)} | Reformulaciones: {st.session_state.total_reformulations} | Provider: {st.session_state.api_provider}"):
+        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+        with col1:
+                configure_api_key()
+                # 5. Validación de API Key
+                if not st.session_state.api_key:
+                    msgX = f"⚠️ Configura tu API Key de {st.session_state.api_provider} en la barra lateral o en config.toml."
+                    return
+        with col2: 
+            # 6b. Modo de agente (chat / code)
+            agent_mode = st.radio(
+                        "Modo de agente",
+                        options=["chat", "code"],
+                        index=0 if st.session_state.agent_mode == "chat" else 1,
+                        horizontal=True,
+                        help="Chat: conversación normal. Code: el asistente puede explorar y modificar archivos del proyecto (con restricciones)."
+            )
+            if agent_mode != st.session_state.agent_mode:
+                        st.session_state.agent_mode = agent_mode
+                        st.rerun()
+        with col3: 
+            configure_model_effort()
+            if not st.session_state.api_brainer:
+                pass
+        with col4:
+            # 6a. Subida de Archivos
+            uploaded_files = st.file_uploader(
+                "📎 Adjuntar archivos (opcional)",
+                accept_multiple_files=True,
+                key=f"file_uploader_{st.session_state.uploader_key}",
+                label_visibility="collapsed",
+                help="Sube archivos de texto, PDF, DOCX, CSV, JSON, código, etc."
+            )                
+
+            if uploaded_files:
+                msgX = f"📎 Archivos adjuntos: {', '.join([f.name for f in uploaded_files])}"
+        with col5, col6: "" 
+        with col7:
+            st.caption("Vaciar Platica")
+            if st.button("🗑️ "):
                 clear_current_conversation()
                 st.rerun()
+        #
+        displayMSGx(msg=msgX)
 
     # 4. Dibujar Historial de Mensajes
     for idx, msg in enumerate(st.session_state.messages):
@@ -68,25 +190,14 @@ def main():
             if (msg.get("reformulation_count") or 0) > 0:
                 st.caption(f"🔄 *Reformulado {msg['reformulation_count']} veces*")
                 
-    # 5. Validación de API Key
-    if not st.session_state.api_key:
-        st.warning(f"⚠️ Configura tu API Key de {st.session_state.api_provider} en la barra lateral o en config.toml.")
-        return
 
-    # 6. Subida de Archivos
-    uploaded_files = st.file_uploader(
-        "📎 Adjuntar archivos (opcional)",
-        accept_multiple_files=True,
-        key=f"file_uploader_{st.session_state.uploader_key}",
-        label_visibility="collapsed",
-        help="Sube archivos de texto, PDF, DOCX, CSV, JSON, código, etc."
-    )
-
-    if uploaded_files:
-        with st.container():
-            st.caption(f"📎 Archivos adjuntos: {', '.join([f.name for f in uploaded_files])}")
+    # 
+    # ============================================
+    # 
 
     # 7. Input del Usuario y Generación
+    # ============================================
+    #
     if prompt := st.chat_input("Escribe tu mensaje..."):
         file_content = ""
         file_metadata = []
@@ -152,14 +263,14 @@ def main():
             )
 
             try:
-                # Selección dinámica de la API
+                effort_params = get_effort_params(st.session_state.api_provider, st.session_state.api_brainer)
+                
                 if st.session_state.api_provider == "DeepSeek":
-                    stream_gen = stream_deepseek_completion(api_messages, st.session_state.api_key)
+                    stream_gen = stream_deepseek_completion(api_messages, st.session_state.api_key, **effort_params)
                 elif st.session_state.api_provider == "Mistral AI":
-                    stream_gen = stream_mistral_completion(api_messages, st.session_state.api_key)
+                    stream_gen = stream_mistral_completion(api_messages, st.session_state.api_key, **effort_params)
                 else:
-                    stream_gen = stream_gemini_completion(api_messages, st.session_state.api_key)
-
+                    stream_gen = stream_gemini_completion(api_messages, st.session_state.api_key, **effort_params)
                 # Iterar el streaming
                 for chunk in stream_gen:
                     if chunk:
