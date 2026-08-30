@@ -10,6 +10,7 @@ class ChatDatabase:
     def __init__(self, db_path: str = "chat_history.db"):
         self.db_path = db_path
         self.init_database()
+        self._migrate()
 
     def init_database(self):
         """Inicializa la base de datos y crea las tablas necesarias"""
@@ -52,6 +53,50 @@ class ChatDatabase:
                 CREATE INDEX IF NOT EXISTS idx_conversations_updated 
                 ON conversations(updated_at DESC)
             ''')
+
+            conn.commit()
+
+    def _migrate(self):
+        """Migraciones idempotentes que se ejecutan en cada arranque.
+
+        Todas las operaciones aquí deben ser seguras de ejecutar múltiples
+        veces sin efectos secundarios (CREATE IF NOT EXISTS, chequeo de
+        columnas antes de ALTER, etc.).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # --- Migración 1: tabla `projects` ---
+            # Sin `is_active`: los proyectos se borran físicamente (hard delete).
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS projects (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT NOT NULL UNIQUE,
+                    description   TEXT,
+                    system_prompt TEXT,
+                    icon          TEXT DEFAULT '📁',
+                    color         TEXT DEFAULT '#808080',
+                    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # --- Migración 2: columna `project_id` en `conversations` ---
+            # ALTER TABLE ADD COLUMN falla si la columna ya existe, así que
+            # inspeccionamos el esquema antes.
+            cursor.execute("PRAGMA table_info(conversations)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            if 'project_id' not in existing_cols:
+                cursor.execute(
+                    "ALTER TABLE conversations ADD COLUMN project_id INTEGER"
+                )
+
+            # --- Migración 3: índice para lookups por proyecto ---
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_conversations_project 
+                ON conversations(project_id)
+            ''')
+
+            conn.commit()
 
             conn.commit()
 
@@ -160,6 +205,173 @@ class ChatDatabase:
 
             conn.commit()
             return to_delete
+
+    # ========== PROYECTOS ==========
+
+    def create_project(
+        self,
+        name: str,
+        description: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        icon: str = '📁',
+        color: str = '#808080'
+    ) -> int:
+        """Crea un proyecto y retorna su ID.
+
+        Levanta sqlite3.IntegrityError si el nombre ya existe (UNIQUE).
+        Levanta ValueError si el nombre está vacío.
+        """
+        if not name or not name.strip():
+            raise ValueError("El nombre del proyecto no puede estar vacío")
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''INSERT INTO projects (name, description, system_prompt, icon, color)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (name.strip(), description, system_prompt, icon, color)
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_projects(self) -> List[Dict]:
+        """Devuelve todos los proyectos con conteo de conversaciones asociadas.
+
+        Ordenados alfabéticamente (case-insensitive).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT p.*,
+                       (SELECT COUNT(*) FROM conversations c 
+                        WHERE c.project_id = p.id AND c.is_active = 1) as conversation_count
+                FROM projects p
+                ORDER BY p.name COLLATE NOCASE ASC
+            ''')
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_project(self, project_id: int) -> Optional[Dict]:
+        """Retorna un proyecto por ID, o None si no existe."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def update_project(self, project_id: int, **fields):
+        """Actualiza campos del proyecto (sólo whitelist).
+
+        Ejemplo: db.update_project(3, name='Nuevo', color='#ff0000')
+
+        Campos permitidos: name, description, system_prompt, icon, color.
+        Los desconocidos se ignoran silenciosamente.
+        """
+        allowed = {'name', 'description', 'system_prompt', 'icon', 'color'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+
+        if 'name' in updates and (not updates['name'] or not updates['name'].strip()):
+            raise ValueError("El nombre del proyecto no puede estar vacío")
+        if 'name' in updates:
+            updates['name'] = updates['name'].strip()
+
+        set_clause = ', '.join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [project_id]
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE projects SET {set_clause} WHERE id = ?",
+                values
+            )
+            conn.commit()
+
+    def delete_project(self, project_id: int) -> int:
+        """HARD delete del proyecto. Los chats asociados quedan sin proyecto (NULL).
+
+        TODO(backup-zip): antes de borrar, exportar el proyecto y sus chats a
+        un archivo .zip para poder recuperarlo. Formato pendiente de definir.
+
+        Retorna el número de conversaciones que quedaron desasignadas.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # 1. Contar y desasignar chats — jamás cascade delete de chats.
+            cursor.execute(
+                "SELECT COUNT(*) FROM conversations WHERE project_id = ?",
+                (project_id,)
+            )
+            orphaned = cursor.fetchone()[0]
+
+            cursor.execute(
+                "UPDATE conversations SET project_id = NULL WHERE project_id = ?",
+                (project_id,)
+            )
+
+            # 2. Borrar la fila del proyecto.
+            cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+            conn.commit()
+            return orphaned
+
+    def assign_conversation_to_project(
+        self,
+        conversation_id: int,
+        project_id: Optional[int]
+    ):
+        """Asigna una conversación a un proyecto.
+
+        project_id=None desasigna (queda en 'Sin proyecto').
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE conversations SET project_id = ? WHERE id = ?",
+                (project_id, conversation_id)
+            )
+            conn.commit()
+
+    def get_conversations_grouped(self) -> List[Dict]:
+        """Devuelve las conversaciones agrupadas por proyecto, listas para renderizar.
+
+        Estructura:
+            [
+                {'project': {id, name, icon, color, ...}, 'conversations': [...]},
+                ...
+                {'project': None, 'conversations': [...]}  # 'Sin proyecto', al final
+            ]
+
+        Los proyectos van ordenados alfabéticamente; 'Sin proyecto' siempre al final.
+        Dentro de cada grupo, las conversaciones van por updated_at DESC.
+        """
+        projects = self.get_projects()
+        all_convs = self.get_conversations()
+
+        # Indexar conversaciones por project_id
+        by_project: Dict[Optional[int], List[Dict]] = {}
+        for conv in all_convs:
+            pid = conv.get('project_id')  # None si no asignada
+            by_project.setdefault(pid, []).append(conv)
+
+        result = []
+        for project in projects:
+            result.append({
+                'project': project,
+                'conversations': by_project.get(project['id'], [])
+            })
+
+        # Grupo 'Sin proyecto' — siempre al final, incluso si está vacío
+        # (útil para mostrar la cabecera y que se vea "hay una sección aquí").
+        result.append({
+            'project': None,
+            'conversations': by_project.get(None, [])
+        })
+
+        return result
 
     # ========== MENSAJES ==========
 
