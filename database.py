@@ -116,6 +116,51 @@ class ChatDatabase:
             )
             conn.commit()
 
+    def delete_empty_conversations(self, exclude_ids: Optional[List[int]] = None) -> List[int]:
+        """Elimina físicamente todas las conversaciones activas sin mensajes.
+
+        Sigue el patrón SELECT → filtrar → iterar DELETE:
+          1. Selecciona los IDs de conversaciones activas con 0 mensajes.
+          2. Filtra los que estén en `exclude_ids` (la conversación actual, la que
+             se está cargando, etc.) para no borrar por debajo del propio usuario.
+          3. Itera y elimina uno a uno.
+
+        A diferencia de `delete_conversation` (que hace soft-delete: is_active=0),
+        aquí se hace HARD delete: no hay contenido que preservar en una conversación
+        vacía, así que se elimina la fila para no acumular basura en la tabla.
+
+        Args:
+            exclude_ids: IDs que no deben borrarse aunque estén vacíos.
+
+        Returns:
+            Lista de IDs efectivamente eliminados (útil para logging/debug).
+        """
+        exclude = set(exclude_ids or [])
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # 1. SELECT: conversaciones activas sin ningún mensaje asociado.
+            cursor.execute('''
+                SELECT c.id
+                FROM conversations c
+                LEFT JOIN messages m ON m.conversation_id = c.id
+                WHERE c.is_active = 1
+                GROUP BY c.id
+                HAVING COUNT(m.id) = 0
+            ''')
+            empty_ids = [row[0] for row in cursor.fetchall()]
+
+            # 2. Filtrar los que el caller quiere proteger.
+            to_delete = [cid for cid in empty_ids if cid not in exclude]
+
+            # 3. Iterar y eliminar. Parametrizado — nunca interpolar el id en el SQL.
+            for cid in to_delete:
+                cursor.execute("DELETE FROM conversations WHERE id = ?", (cid,))
+
+            conn.commit()
+            return to_delete
+
     # ========== MENSAJES ==========
 
     def save_message(self, conversation_id: int, message: Dict):

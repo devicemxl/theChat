@@ -5,7 +5,7 @@ from typing import List, Dict
 # Importamos la base de datos (asumiendo que database.py está en la raíz)
 from database import ChatDatabase
 
-# Importaremos estas funciones de los módulos que crearás después
+from utils.config import get_secret
 from utils.file_handler import extract_files_from_message
 from utils.data_export import (
     export_current_conversation, 
@@ -19,6 +19,10 @@ def init_database():
     """Inicializa la base de datos y todas las variables de estado (session_state)"""
     if "db" not in st.session_state:
         st.session_state.db = ChatDatabase("chat_history.db")
+        # Limpieza defensiva al arranque: elimina conversaciones vacías de
+        # sesiones previas. Corre ANTES de crear la nueva de este arranque
+        # para no borrarla por accidente.
+        st.session_state.db.delete_empty_conversations()
 
     if "current_conversation_id" not in st.session_state:
         st.session_state.current_conversation_id = st.session_state.db.create_conversation(
@@ -58,6 +62,9 @@ def init_database():
 
     if "mistral_api_key" not in st.session_state:
         st.session_state.mistral_api_key = get_secret("MISTRAL_API_KEY")
+
+    if "anthropic_api_key" not in st.session_state:
+        st.session_state.anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
 
     if "api_key" not in st.session_state:
         st.session_state.api_key = st.session_state.deepseek_api_key
@@ -121,6 +128,11 @@ def create_new_conversation():
 
 def switch_conversation(conversation_id: int):
     """Cambia a una conversación existente"""
+    # Limpieza: elimina vacías del histórico ANTES de cargar la seleccionada.
+    # Excluimos la que se está cargando: aunque esté vacía, el usuario la
+    # eligió deliberadamente y podría querer continuarla.
+    st.session_state.db.delete_empty_conversations(exclude_ids=[conversation_id])
+
     st.session_state.current_conversation_id = conversation_id
     st.session_state.messages = load_conversation_messages(conversation_id)
     st.session_state.reformulation_count = 0
@@ -246,5 +258,3 @@ def render_sidebar():
             with col2:
                 st.metric("Truncados", stats["total_truncated"])
                 st.metric("Con truncamiento", stats["conversations_with_truncation"])
-
-        st.divider()

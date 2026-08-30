@@ -6,6 +6,10 @@ from typing import List, Dict, Generator
 MAX_TOKENS_DEEPSEEK = 8192
 MAX_TOKENS_MISTRAL = 2000
 MAX_TOKENS_GEMINI = None  # Sin límite explícito en Gemini
+MAX_TOKENS_ANTHROPIC = 4096
+
+# Versión de la API de Anthropic (requerida por el header 'anthropic-version')
+ANTHROPIC_API_VERSION = "2023-06-01"
 
 # ========== FUNCIONES DE DETECCIÓN DE REFORMULACIÓN ==========
 
@@ -212,3 +216,82 @@ def stream_gemini_completion(
                             continue
     except requests.exceptions.RequestException as e:
         yield f"⚠️ Error de conexión con Gemini: {str(e)}"
+
+
+def stream_anthropic_completion(
+    messages: List[Dict],
+    api_key: str,
+    model: str = "claude-sonnet-4-5-20250929",
+    temperature: float = 0.7,
+) -> Generator[str, None, None]:
+    """Streaming para la API de Anthropic (Claude Messages API).
+
+    - El 'system' se envía en un campo aparte (no como mensaje con role=system).
+    - El streaming SSE emite eventos 'content_block_delta' con delta.text.
+    """
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": ANTHROPIC_API_VERSION,
+        "content-type": "application/json",
+    }
+
+    # Anthropic separa el system del array de mensajes; si hay varios systems los concatenamos.
+    system_prompt = None
+    anthropic_messages = []
+    for msg in messages:
+        if msg["role"] == "system":
+            system_prompt = msg["content"] if system_prompt is None else system_prompt + "\n\n" + msg["content"]
+        else:
+            anthropic_messages.append({
+                "role": msg["role"],
+                "content": msg["content"],
+            })
+
+    payload = {
+        "model": model,
+        "messages": anthropic_messages,
+        "max_tokens": MAX_TOKENS_ANTHROPIC,
+        "temperature": temperature,
+        "stream": True,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+
+    try:
+        with requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=payload,
+            stream=True,
+            timeout=30,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8")
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    break
+                try:
+                    json_data = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = json_data.get("type")
+                if event_type == "content_block_delta":
+                    delta = json_data.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text")
+                        if text:
+                            yield text
+                elif event_type == "message_stop":
+                    break
+                elif event_type == "error":
+                    err = json_data.get("error", {})
+                    yield f"⚠️ Error de Anthropic: {err.get('message', 'desconocido')}"
+                    break
+    except requests.exceptions.RequestException as e:
+        yield f"⚠️ Error de conexión con Anthropic: {str(e)}"
