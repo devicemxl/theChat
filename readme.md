@@ -148,3 +148,4 @@ Planned but not yet used:
 
 Personal project. No public license is offered at this time. If you want to
 use the code, open an issue and let's talk.
+.
