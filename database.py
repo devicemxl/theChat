@@ -547,7 +547,39 @@ class ChatDatabase:
         for msg in mother_messages + own_messages:
             msg["truncated"] = bool(msg["truncated"])
         return mother_messages + own_messages
-    
+
+    def create_fork(self, conversation_id: int, fork_at_message_id: int) -> int:
+        """Crea una conversación hija que hereda contexto de la madre hasta el punto de fork.
+
+        La hija se crea sin mensajes propios; hereda el proyecto y el título de la madre.
+        Retorna el id de la nueva conversación.
+        """
+        conv = self.get_conversation(conversation_id)
+        if not conv:
+            raise ValueError(f"Conversación {conversation_id} no existe")
+
+        new_id = self.create_conversation(conv["title"])
+
+        if conv.get("project_id"):
+            self.assign_conversation_to_project(new_id, conv["project_id"])
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE conversations SET forked_from_conversation_id = ?, fork_at_message_id = ? WHERE id = ?",
+                (conversation_id, fork_at_message_id, new_id),
+            )
+            conn.commit()
+        return new_id
+
+
+    def delete_last_turn(self, conversation_id: int) -> bool:
+        """Elimina el último turno (pregunta + respuesta) de una conversación.
+
+        Solo aplica si hay al menos 2 mensajes y el último es de rol 'assistant'.
+        Retorna True si se eliminó, False si no aplica.
+        """
+        messages = self.get_messages
+        
     def delete_messages(self, conversation_id: int):
         """Elimina todos los mensajes de una conversación"""
         with sqlite3.connect(self.db_path) as conn:
