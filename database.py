@@ -69,6 +69,7 @@ class ChatDatabase:
         self._migrate_rag_columns()
         self._migrate_pending_reindex_index()
         self._migrate_messages_parent_message_id()
+        self._migrate_conversations_fork_columns()   # ← NUEVO
 
     def _migrate_projects_table(self):
         """Crea la tabla `projects` si no existe."""
@@ -144,6 +145,25 @@ class ChatDatabase:
             ''')
             conn.commit()
 
+    def _migrate_conversations_fork_columns(self):
+        """Añade `forked_from_conversation_id` y `fork_at_message_id` a conversations (Fase 1)."""
+        with sqlite3.connect(self.db_path) as conn:
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
+            if 'forked_from_conversation_id' not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN forked_from_conversation_id INTEGER"
+                )
+            if 'fork_at_message_id' not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN fork_at_message_id INTEGER"
+                )
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_conversations_forked_from
+                ON conversations(forked_from_conversation_id)
+            ''')
+            conn.commit()
     # ========== CONVERSACIONES ==========
 
     def create_conversation(self, title: str = "Nueva conversación") -> int:
@@ -436,32 +456,33 @@ class ChatDatabase:
 
     # ========== MENSAJES ==========
 
-    def save_message(self, conversation_id: int, message: Dict):
-        """Guarda un mensaje en la conversación"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO messages 
-                (conversation_id, role, content, truncated, interrupted_at, reformulation_count)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                conversation_id,
-                message.get("role", ""),
-                message.get("content", ""),
-                1 if message.get("truncated", False) else 0,
-                message.get("interrupted_at"),
-                message.get("reformulation_count")
-            ))
+def save_message(self, conversation_id: int, message: Dict):
+    """Guarda un mensaje en la conversación"""
+    with sqlite3.connect(self.db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO messages 
+            (conversation_id, role, content, truncated, interrupted_at, reformulation_count, parent_message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            conversation_id,
+            message.get("role", ""),
+            message.get("content", ""),
+            1 if message.get("truncated", False) else 0,
+            message.get("interrupted_at"),
+            message.get("reformulation_count"),
+            message.get("parent_message_id")   # ← NUEVO
+        ))
 
-            # Actualizar contador y timestamp de la conversación
-            cursor.execute('''
-                UPDATE conversations 
-                SET message_count = message_count + 1,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (conversation_id,))
+        # Actualizar contador y timestamp de la conversación
+        cursor.execute('''
+            UPDATE conversations 
+            SET message_count = message_count + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ''', (conversation_id,))
 
-            conn.commit()
+        conn.commit()
 
     def get_messages(self, conversation_id: int) -> List[Dict]:
         """Obtiene todos los mensajes de una conversación"""
