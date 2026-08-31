@@ -56,19 +56,23 @@ class ChatDatabase:
 
             conn.commit()
 
+    # ========== MIGRACIONES ==========
+
     def _migrate(self):
-        """Migraciones idempotentes que se ejecutan en cada arranque.
+        """Ejecuta las migraciones idempotentes en orden.
 
-        Todas las operaciones aquí deben ser seguras de ejecutar múltiples
-        veces sin efectos secundarios (CREATE IF NOT EXISTS, chequeo de
-        columnas antes de ALTER, etc.).
+        Cada método de migración es independiente y hace su propio commit.
+        Si una falla, las anteriores ya están aplicadas (no se revierte todo).
         """
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
+        self._migrate_projects_table()
+        self._migrate_conversations_project_column()
+        self._migrate_rag_columns()
+        self._migrate_pending_reindex_index()
 
-            # --- Migración 1: tabla `projects` ---
-            # Sin `is_active`: los proyectos se borran físicamente (hard delete).
-            cursor.execute('''
+    def _migrate_projects_table(self):
+        """Crea la tabla `projects` si no existe."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
                 CREATE TABLE IF NOT EXISTS projects (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     name          TEXT NOT NULL UNIQUE,
@@ -79,48 +83,48 @@ class ChatDatabase:
                     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            conn.commit()
 
-            # --- Migración 2: columna `project_id` en `conversations` ---
-            # ALTER TABLE ADD COLUMN falla si la columna ya existe, así que
-            # inspeccionamos el esquema antes.
-            cursor.execute("PRAGMA table_info(conversations)")
-            existing_cols = {row[1] for row in cursor.fetchall()}
+    def _migrate_conversations_project_column(self):
+        """Añade `project_id` a conversations y su índice."""
+        with sqlite3.connect(self.db_path) as conn:
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
             if 'project_id' not in existing_cols:
-                cursor.execute(
+                conn.execute(
                     "ALTER TABLE conversations ADD COLUMN project_id INTEGER"
                 )
-
-            # --- Migración 3: índice para lookups por proyecto ---
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_conversations_project 
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_conversations_project
                 ON conversations(project_id)
             ''')
+            conn.commit()
 
-            # --- Migración 4: columnas para el pipeline RAG (preparación) ---
-            # Silent hooks para cuando exista HNSW: `indexed_at` marca cuándo se
-            # calcularon embeddings por última vez; `pending_reindex` es la flag
-            # que el worker background lee para saber qué chats mover en el índice.
-            # Ambas quedan NULL/0 hasta que el pipeline las use.
+    def _migrate_rag_columns(self):
+        """Añade columnas reservadas para el pipeline RAG."""
+        with sqlite3.connect(self.db_path) as conn:
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(conversations)")
+            }
             if 'indexed_at' not in existing_cols:
-                cursor.execute(
+                conn.execute(
                     "ALTER TABLE conversations ADD COLUMN indexed_at TIMESTAMP"
                 )
             if 'pending_reindex' not in existing_cols:
-                cursor.execute(
+                conn.execute(
                     "ALTER TABLE conversations ADD COLUMN pending_reindex INTEGER DEFAULT 0"
                 )
+            conn.commit()
 
-            # --- Migración 5: índice parcial para el worker de reindexado ---
-            # Solo indexa filas con pending_reindex=1, que serán poquísimas.
-            # WHERE en índice = mucho más chico que un índice sobre toda la tabla.
-            cursor.execute('''
+    def _migrate_pending_reindex_index(self):
+        """Índice parcial para el futuro worker de reindexado."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_conversations_pending_reindex
                 ON conversations(pending_reindex)
                 WHERE pending_reindex = 1
             ''')
-
-            conn.commit()
-
             conn.commit()
 
     # ========== CONVERSACIONES ==========
