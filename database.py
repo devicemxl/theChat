@@ -456,33 +456,33 @@ class ChatDatabase:
 
     # ========== MENSAJES ==========
 
-def save_message(self, conversation_id: int, message: Dict):
-    """Guarda un mensaje en la conversación"""
-    with sqlite3.connect(self.db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO messages 
-            (conversation_id, role, content, truncated, interrupted_at, reformulation_count, parent_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            conversation_id,
-            message.get("role", ""),
-            message.get("content", ""),
-            1 if message.get("truncated", False) else 0,
-            message.get("interrupted_at"),
-            message.get("reformulation_count"),
-            message.get("parent_message_id")   # ← NUEVO
-        ))
+    def save_message(self, conversation_id: int, message: Dict):
+        """Guarda un mensaje en la conversación"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO messages 
+                (conversation_id, role, content, truncated, interrupted_at, reformulation_count, parent_message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                conversation_id,
+                message.get("role", ""),
+                message.get("content", ""),
+                1 if message.get("truncated", False) else 0,
+                message.get("interrupted_at"),
+                message.get("reformulation_count"),
+                message.get("parent_message_id")   # ← NUEVO
+            ))
 
-        # Actualizar contador y timestamp de la conversación
-        cursor.execute('''
-            UPDATE conversations 
-            SET message_count = message_count + 1,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        ''', (conversation_id,))
+            # Actualizar contador y timestamp de la conversación
+            cursor.execute('''
+                UPDATE conversations 
+                SET message_count = message_count + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (conversation_id,))
 
-        conn.commit()
+            conn.commit()
 
     def get_messages(self, conversation_id: int) -> List[Dict]:
         """Obtiene todos los mensajes de una conversación"""
