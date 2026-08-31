@@ -1,97 +1,261 @@
 # Architecture
 
-| key             | value                                                                         |
-|-----------------|-------------------------------------------------------------------------------|
-| tipo            | technical document · system architecture                                      |
-| tema            | software architecture · RAG · multi-project                                   |
-| titulo          | Multi-Project RAG System Architecture                                         |
-| parte           | VI — System Architecture                                                      |
-| maturity        | draft for review                                                              |
-| confidence      | high (concept) · medium (final implementation)                                |
-| material origen | June 2026 conversation — integration of RAG pipeline with multi-provider chat |
-| fecha           | 2026-06-08                                                                    |
-| mantenedor      | David                                                                         |
+| key             | value                                                              |
+|-----------------|--------------------------------------------------------------------|
+| tipo            | technical document · system architecture                           |
+| tema            | software architecture · personal chat interface                    |
+| titulo          | theChat Architecture                                               |
+| maturity        | current implementation + planned RAG extension                     |
+| confidence      | high (current) · medium (planned)                                  |
+| material origen | development log through August 2026                                |
+| fecha           | 2026-08-31                                                         |
+| mantenedor      | David                                                              |
 
-## 1. Vision Overview
+## 1. Scope
 
-The system constitutes a retrieval augmented generation platform organized around the concept of isolated projects. Each project maintains its own vector index, relational database, and embedding configuration. The chat acts as a unified interface that queries the active project and enriches model responses with retrieved context.
+This document describes the current architecture of theChat as of August 2026
+and the planned RAG extension. The RAG section is a design plan — no RAG code
+exists yet in the repository. Schema-level hooks are already in place, but no
+ingestion, embedding, or retrieval logic is implemented.
 
-The architecture separates three fundamental domains: the presentation layer built with Streamlit, the business logic layer that orchestrates ingestion and search operations, and the data layer that persists documents, vectors, and conversations.
+Everything under "Current architecture" reflects code that ships and runs.
+Everything under "Planned RAG extension" is intent, subject to revision when
+it becomes real.
 
-## 2. Architectural Principles
+## 2. Design principles
 
-Project isolation constitutes the central design principle. Each project operates as an independent unit with its own storage, index, and configuration. This decision allows horizontal scaling by adding projects without affecting existing ones, and facilitates work distribution among teams.
+**Simplicity over abstraction.** The application is a single Streamlit process
+against a local SQLite file. There is no service layer, no daemon, no queue.
+When RAG lands, the vector index lives beside the SQLite file as another local
+artifact.
 
-Separation of responsibilities guides code modularization. The user interface contains no business logic, business logic does not directly access the database, and external provider adapters are encapsulated behind common interfaces.
+**Separation of concerns without over-engineering.** The code splits into
+`views/` (Streamlit pages), `ui/` (reusable sidebar/toolbar/components),
+`utils/` (config, constants, file I/O, import/export), `llm/` (API adapters),
+and a single `database.py` for persistence. No dependency injection framework,
+no repository pattern — just modules with clear names.
 
-The system adopts a graceful degradation strategy. If the primary embedding engine fails, secondary alternatives are used. If semantic search does not produce sufficient results, tag-based filters are employed. This resilience guarantees service availability.
+**Idempotent migrations.** The database evolves through additive migrations
+that run on every startup. Adding a column or an index never depends on
+knowing the previous state. Data is never destroyed by a migration.
 
-## 3. System Components
+**Personal scope.** No authentication, no multi-tenant model, no remote
+storage, no permissions. The user is one person on one machine.
 
-### 3.1 Presentation Layer
+## 3. Current architecture
 
-The Streamlit application presents three main functional areas: conversational chat, project management, and document ingestion. The chat allows the user to select the active project through a dropdown selector, visualize the sources used in each response through expandable panels, and control whether RAG search is active through a toggle switch.
+### 3.1 Component layout
 
-Project management displays a list of existing projects with their statistics, allows creating new projects with their global tags, and facilitates deletion or archiving of obsolete projects.
+```
+Streamlit process
+├── app.py                    entry point, st.navigation
+│
+├── views/                    top-level pages
+│   ├── chat.py               conversation flow
+│   ├── projects.py           project CRUD
+│   └── ingest.py             stub (RAG placeholder)
+│
+├── ui/                       cross-view components
+│   ├── sidebar.py            history grouped by project
+│   ├── toolbar.py            provider/mode/effort/project selector
+│   └── components.py         CSS + copy button
+│
+├── llm/api_clients.py        streaming clients: DeepSeek, Gemini,
+│                             Mistral, Anthropic + context builder
+│
+├── utils/                    config, constants, file I/O, import/export
+│
+└── database.py               ChatDatabase over SQLite
+        │
+        └── chat_history.db   local file
+```
 
-Document ingestion provides a multi-file uploader, a destination project selector, quick or deep processing options, and a progress bar with real-time logs.
+### 3.2 Data model
 
-### 3.2 Business Logic Layer
+Three tables in `chat_history.db`:
 
-The main orchestrator coordinates the query flow. It receives the user question, identifies the active project, invokes the search engine, builds the enriched context, and sends the request to the selected AI provider.
+**conversations**
 
-The project manager administers the lifecycle of each project. It creates the directory structure, initializes the database and index, updates metadata, and manages safe deletion.
+| column           | type      | notes                                          |
+|------------------|-----------|------------------------------------------------|
+| id               | INTEGER   | primary key                                    |
+| title            | TEXT      | user-editable                                  |
+| created_at       | TIMESTAMP |                                                |
+| updated_at       | TIMESTAMP | updated on each message                        |
+| message_count    | INTEGER   |                                                |
+| is_active        | INTEGER   | soft-delete flag                               |
+| project_id       | INTEGER   | nullable — NULL means "no project"             |
+| indexed_at       | TIMESTAMP | reserved for RAG (currently NULL)              |
+| pending_reindex  | INTEGER   | reserved for RAG (currently 0)                 |
 
-The document processor implements two ingestion modes. Quick mode generates embeddings directly from text without additional processing. Deep mode uses a language model to extract semantic units, generate page summaries, and assign automatic tags.
+**messages**
 
-The search engine executes hybrid queries. It generates the query embedding with the query prefix, searches nearest neighbors in the HNSW index, retrieves corresponding metadata from SQLite, applies tag filters if specified, and sorts results by similarity.
+| column                | type      | notes                                     |
+|-----------------------|-----------|-------------------------------------------|
+| id                    | INTEGER   | primary key                               |
+| conversation_id       | INTEGER   | foreign key (not enforced)                |
+| role                  | TEXT      | user / assistant / system                 |
+| content               | TEXT      |                                           |
+| truncated             | INTEGER   | 1 if streaming was interrupted            |
+| interrupted_at        | TEXT      | timestamp of interruption                 |
+| reformulation_count   | INTEGER   |                                           |
+| created_at            | TIMESTAMP |                                           |
 
-### 3.3 Data Layer
+**projects**
 
-Each project's SQLite database stores documents with their embeddings as binary blobs, tags as serialized JSON, full textual content, and additional metadata. The conversations and messages table resides in a separate application-level database.
+| column         | type      | notes                                         |
+|----------------|-----------|-----------------------------------------------|
+| id             | INTEGER   | primary key                                   |
+| name           | TEXT      | UNIQUE                                        |
+| description    | TEXT      | nullable                                      |
+| system_prompt  | TEXT      | nullable — if set, replaces default in chat   |
+| icon           | TEXT      | emoji, default "📁"                            |
+| color          | TEXT      | hex, from a curated palette of 8              |
+| created_at     | TIMESTAMP |                                               |
 
-Each project's HNSW index is constructed with document embeddings. The similarity metric is cosine, the index dimension matches the embedding model dimension, and construction parameters such as ef\_construction and M are configured per project.
+Projects are hard-deleted (no `is_active` flag) because they carry no message
+history themselves. When a project is deleted, its conversations are
+reassigned to `project_id = NULL` — never cascaded away.
 
-Index metadata files store the dimension, element count, index path, database path, and the ef value used.
+Indexes: `idx_conversations_project` on `(project_id)`, plus a partial index
+`idx_conversations_pending_reindex` on `(pending_reindex)` restricted to rows
+where `pending_reindex = 1`. The partial index costs almost nothing until
+RAG starts using it.
 
-## 4. Query Flow
+### 3.3 Query flow (chat)
 
-The query flow starts when the user sends a message in the chat. The system detects the active project and verifies whether RAG search is enabled. If enabled, it generates the query embedding using the appropriate query prefix.
+1. User types in the chat input and optionally attaches files.
+2. `views/chat.py` extracts file text via `utils/file_handler.py` and appends
+   it to the user turn.
+3. The turn is persisted to `messages` via `ChatDatabase.save_message`.
+4. `llm/api_clients.py::build_context_with_reformulation_awareness` composes
+   the request:
+   - If the active conversation belongs to a project with a `system_prompt`,
+     that prompt replaces the default and the reformulation hint is skipped.
+   - Otherwise, the default prompt is used, extended with a reformulation
+     hint when detected.
+5. The correct provider's streaming function is called with the composed
+   messages. The response is streamed token by token to the UI and, on
+   completion, persisted.
 
-The search engine queries the active project's HNSW index with the generated embedding, requesting a configurable number of neighbors. The resulting identifiers are used to retrieve corresponding documents from SQLite.
+### 3.4 Multi-provider adapter
 
-The system builds the enriched context by inserting retrieved documents into the system prompt. Each document includes its similarity score and textual content. The prompt instructs the model to use only relevant information and to indicate when sufficient information is not found.
+Each provider has a `stream_<provider>_completion` function in
+`llm/api_clients.py`. All follow the same shape: take `(messages, api_key,
+**provider_kwargs)`, return a generator of text chunks.
 
-The request is sent to the selected AI provider with the enriched context. The response is streamed to the user. The system displays the sources used in expandable panels below the response.
+Provider-specific quirks are handled inside the function:
 
-## 5. Ingestion Flow
+- **DeepSeek / Mistral**: OpenAI-compatible schema, SSE streaming.
+- **Gemini**: system message extracted from the array into a `system_instruction` field; roles remapped (`assistant` → `model`).
+- **Anthropic**: `system` extracted to a top-level field; SSE stream carries
+  `content_block_delta` events with `text_delta` payloads.
 
-The ingestion flow starts when the user uploads documents to the active project. The processor detects the file type and extracts text using the appropriate adapter. Supported formats include plain text, markdown, PDF, DOCX, CSV, JSON, and code files.
+Provider selection is stored in `session_state.api_provider` and mapped to
+its key. Adding a fifth provider is one function plus one branch in
+`toolbar.configure_api_key`.
 
-In quick mode, the extracted text is sent directly to the embedding engine to generate the vector. In deep mode, the text is divided into configurable windows with overlap, each window is sent to a language model to extract semantic units, generate summaries, and assign tags.
+### 3.5 Navigation
 
-The generated embeddings are inserted into the project's SQLite database and HNSW index. The system handles duplicate detection, index resizing when capacity is reached, and metadata updates.
+Streamlit's `st.navigation` (available from 1.36) drives page selection.
+`app.py` declares three `st.Page` entries and delegates rendering via
+`pg.run()`. Each view is a standalone script that runs top-to-bottom when
+selected.
 
-## 6. Embedding Strategy
+`set_page_config` and CSS injection live in `app.py` so they run once per
+session, not once per page.
 
-The primary embedding engine is Gleann with EmbeddingGemma, operating locally for speed and privacy. If Gleann is unavailable or fails, Mistral embedding API serves as the secondary alternative. DeepSeek embedding provides an economical fallback option.
+### 3.6 State management
 
-Each embedding type uses appropriate prefixes. Documents use the document prefix, queries use the query prefix, and similarity comparisons use the similarity prefix. This asymmetric approach optimizes retrieval quality.
+All shared state lives in `st.session_state`. The critical keys:
 
-## 7. Configuration Management
+- `db` — the `ChatDatabase` instance (initialized once)
+- `current_conversation_id` — the active chat
+- `messages` — in-memory copy of the current chat's messages
+- `api_provider`, `api_key`, `api_brainer` — provider selection and effort
+- `agent_mode` — "chat" or "code" (code mode currently does nothing extra)
 
-All system parameters are centralized in a configuration module. This includes model parameters such as temperature and max tokens, RAG parameters such as top-k values and similarity thresholds, and path configurations for databases and indexes.
+`session_state` survives view switches. This is what makes the multi-view
+navigation coherent: you can browse to Projects, come back, and pick up
+where you left off.
 
-API keys are stored in Streamlit secrets and accessed through a secure retrieval function. No keys are hardcoded in source files.
+### 3.7 Cleanup logic
 
-## 8. Deployment Considerations
+Empty conversations (zero messages) are hard-deleted on two occasions:
 
-The system runs as a single Streamlit application. The project directory structure is created on first run. Models and DLLs are loaded lazily to minimize startup time.
+- **On startup** in `ChatDatabase.__init__`, before creating the new
+  conversation for this session. The order matters — sweeping before creation
+  means the new one is never exposed to the delete.
+- **On switch** in `sidebar.switch_conversation`, with the incoming
+  conversation ID excluded from the sweep. This protects a conversation the
+  user is deliberately loading even if it happens to be empty.
 
-For production deployment, the application can be containerized with Docker. The data directory should be mounted as a volume for persistence. Environment variables should be used for sensitive configuration.
+Both use `ChatDatabase.delete_empty_conversations(exclude_ids=...)`.
 
-## 9. Future Extensions
+## 4. Planned RAG extension
 
-Potential extensions include multi-user support with authentication and project-level permissions, cross-project search capabilities, feedback mechanisms to improve retrieval quality, and advanced caching strategies for frequent queries.
+Everything below is a design plan. None of it is implemented as of this
+document's date.
 
-The architecture supports incremental addition of new embedding providers and AI model providers through the adapter pattern.
+### 4.1 Retrieval strategy
+
+The core idea: a single HNSW index shared across projects, with `project_id`
+as a filter column in the metadata database. Because HNSW returns IDs (not
+data), filtering by project happens in SQLite after the graph traversal, at
+zero index-lookup cost.
+
+Trade-off: naive post-filtering degrades recall when a filter is very
+selective. Mitigations under consideration:
+
+1. **Over-retrieval with adaptive expansion**: request K far larger than
+   needed and stop when the filtered set is large enough.
+2. **Namespace partitioning inside the graph**: chunks from different projects
+   are never neighbors, so search inside a project skips the rest of the graph
+   naturally.
+3. **Filtered HNSW**: filter evaluation during graph traversal (as in Qdrant
+   and Weaviate). Best recall/latency but complex to implement well.
+
+Option 1 is the plan for the first iteration. Option 2 or 3 is a later
+optimization if it becomes necessary.
+
+### 4.2 Move-a-chat semantics
+
+Moving a conversation between projects is currently a single-column UPDATE.
+When RAG exists, the same operation must also update the vector index
+association. Two possible UX flows:
+
+- **Blocking with confirmation**: modal warns "N chunks will be re-associated
+  (~T seconds)". OK triggers a synchronous operation with a spinner.
+- **Instant + background reindex**: the UPDATE is immediate; a
+  `pending_reindex = 1` flag is set; a worker processes it later. The chat is
+  temporarily inconsistent for RAG queries.
+
+The database schema is already prepared for the second flow: `indexed_at`
+and `pending_reindex` columns exist, and the partial index on
+`pending_reindex = 1` makes worker polling trivially cheap.
+
+### 4.3 Embedding provider chain
+
+Primary target: [gleann](https://github.com) (my quantized vector engine)
+with EmbeddingGemma at 512 dims (MRL truncation, block-wise int8). Local,
+private, fast.
+
+Fallbacks under consideration if gleann is unavailable on a given platform:
+Mistral embed API, DeepSeek embed API. This chain is a plan, not a
+resilience feature — the primary is expected to work.
+
+### 4.4 Ingestion
+
+The `views/ingest.py` page will host the ingestion UI: multi-file uploader,
+destination project selector, quick/deep processing choice, progress log.
+
+- **Quick**: extract text → chunk with sliding window → embed → insert.
+- **Deep**: same, but each chunk is first passed through a small LLM
+  (candidates: Qwen3-0.6B, OpenELM-270M via nxDeck) to extract semantic
+  units, generate a summary, and assign tags. The tags feed hybrid search.
+
+### 4.5 What does not extend
+
+Multi-user support, authentication, permissions, remote deployment,
+container orchestration, cross-project search UI. These are explicitly out
+of scope.

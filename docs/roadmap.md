@@ -1,207 +1,204 @@
 # Roadmap
 
-## Metadata
+| key             | value                                                              |
+|-----------------|--------------------------------------------------------------------|
+| tipo            | technical document · project roadmap                               |
+| tema            | development phases · current status · next steps                   |
+| titulo          | theChat Roadmap                                                    |
+| maturity        | living document                                                    |
+| confidence      | high (completed phases) · medium (next phase) · low (later ones)   |
+| material origen | development log through August 2026                                |
+| fecha           | 2026-08-31                                                         |
+| mantenedor      | David                                                              |
 
-| key | value |
-|--|--|
-| tipo | technical document · project roadmap |
-| tema | software development · RAG · multi-project |
-| titulo | Multi-Project RAG System Development Roadmap |
-| parte | VI — System Architecture |
-| maturity | draft for review |
-| confidence | high (concept) · medium (final implementation) |
-| material origen | June 2026 conversation — development phases for multi-project RAG integration |
-| fecha | 2026-06-08 |
-| mantenedor | David |
+## 1. Approach
 
-## 1. Roadmap Overview
+theChat evolves in small, testable phases. Each phase changes the running
+application without breaking what came before. Migrations are additive.
+UI additions are opt-in. Nothing is refactored unless the refactor pays
+for itself immediately or unlocks a concrete next step.
 
-The development roadmap defines five sequential phases for implementing the multi-project RAG system. Each phase builds upon the previous one, delivering incremental value and enabling continuous testing and feedback. The roadmap prioritizes foundational work first, followed by feature integration, and concludes with optimization and production readiness.
+Timeline estimates are approximate. Personal-project pace, no external
+deadlines.
 
-The estimated timeline spans approximately eight to ten weeks of focused development. Each phase includes specific milestones that serve as checkpoints for progress evaluation.
+## 2. Completed phases
 
-## 2. Phase 1: Foundation and Refactoring
+### Phase 0 — Base chat (pre-existing)
 
-### Duration: Week 1-2
+Streamlit chat interface with three providers (DeepSeek, Gemini, Mistral),
+SQLite-backed conversation history, streaming responses, and export/import.
 
-### Objective
+### Phase 1 — Anthropic provider + modularization
 
-The foundation phase establishes the modular architecture and centralized configuration that subsequent phases depend upon. This phase addresses the technical debt in the existing chat application and creates the structural framework for multi-project support.
+- Added Anthropic (Claude) as a fourth provider with streaming.
+- Extracted the top expander into a dedicated `ui/toolbar.py`.
+- Extracted `get_secret` into `utils/config.py`, ending duplication across
+  `002.py` and `sidebar.py`.
+- Added a `@st.dialog` confirmation modal for the destructive "clear
+  conversation" action.
 
-### Key Activities
+### Phase 2 — Empty-conversation cleanup + projects data model
 
-The refactoring effort separates the monolithic chat application into distinct modules. The presentation layer handles Streamlit components and user interactions. The business logic layer orchestrates conversation flow and provider management. The data layer manages persistence and retrieval operations.
+- Added `ChatDatabase.delete_empty_conversations(exclude_ids=...)` that
+  runs on startup (before creating the new session's conversation) and
+  on switch (with the incoming ID protected).
+- Introduced the `projects` table with idempotent migration.
+- Added CRUD methods: `create_project`, `get_projects`, `get_project`,
+  `update_project`, `delete_project`, `assign_conversation_to_project`,
+  `get_conversations_grouped`.
+- Hard-delete for projects (chats survive as unassigned).
 
-The configuration system centralizes all parameters including model settings, RAG parameters, and path configurations. API keys move to environment variables or Streamlit secrets. The configuration module provides typed access to all settings.
+### Phase 3 — Multi-view navigation
 
-The project management foundation creates the directory structure for storing project data. This includes the base data directory, project subdirectories, and initialization logic for new projects.
+- Introduced `st.navigation` in a new `app.py` entry point.
+- Moved chat from `002.py` to `views/chat.py`.
+- Added `views/projects.py` with full CRUD UI (create/edit/delete via
+  `@st.dialog` modals, curated 8-color palette in `utils/constants.py`).
+- Added `views/ingest.py` as a stub for the future RAG page.
+- Moved `set_page_config` and CSS to `app.py` so they run once per session.
 
-### Milestones
+### Phase 4 — Project-aware UI + system prompt integration
 
-| Milestone | Description | Acceptance Criteria |
-|--|--|--|
-| M1.1 | Modular chat architecture | Chat functionality works with separated presentation, logic, and data layers |
-| M1.2 | Centralized configuration | All parameters accessible through configuration module; no hardcoded values in source |
-| M1.3 | Project directory structure | System creates project directories with database and index files on project creation |
-| M1.4 | API key security | All API keys stored in environment variables or Streamlit secrets; no keys in source code |
-| M1.5 | Existing functionality preserved | All existing chat features (multi-provider, reformulation, export/import) work without regression |
+- **Toolbar**: project selector as a new column in the top expander. Changing
+  the selector calls `assign_conversation_to_project`.
+- **Sidebar**: history now grouped by project via `get_conversations_grouped`.
+  Empty project sections still show their header. The group containing the
+  active chat auto-expands. Chats render as compact rows with modals for
+  rename and delete (the old `editing_conv_id` inline flow is gone).
+- **New chat inheritance**: "New Conversation" inherits the current chat's
+  project.
+- **System prompt substitution**: `build_context_with_reformulation_awareness`
+  accepts a `project_system_prompt` argument. When set, it replaces the
+  default entirely and skips the reformulation hint. The active project's
+  prompt is fetched via a new `get_conversation_project` JOIN.
+- **Toolbar indicator**: when a project prompt is active and no more urgent
+  message is showing, the toolbar's `st.info` line displays which project
+  prompt is in effect.
 
-## 3. Phase 2: Project Management System
+### Phase 4b — RAG schema preparation
 
-### Duration: Week 3-4
+- Added `conversations.indexed_at` (TIMESTAMP, NULL) and
+  `conversations.pending_reindex` (INTEGER, default 0).
+- Added a partial index on `(pending_reindex)` restricted to `WHERE
+  pending_reindex = 1`, so the future reindex worker polls at near-zero cost.
+- No code writes to these columns yet. They exist only to avoid a schema
+  migration on live data when the RAG pipeline lands.
 
-### Objective
+## 3. Current state (as of this document)
 
-The project management phase implements the core multi-project architecture. This phase enables users to create, configure, and manage isolated projects with their own data stores.
+The chat is fully functional, four providers work, projects organize
+conversations, project system prompts affect the LLM, the sidebar reflects
+the project structure, and the schema is ready for RAG. The Data view is
+still a stub. Nothing depends on any external service beyond the LLM APIs.
 
-### Key Activities
+Bug fixes and small ergonomics still land as needed. There is no "release"
+concept.
 
-The project lifecycle management implements creation, activation, configuration, and deletion of projects. Each project receives a unique identifier, directory structure, and metadata file.
-
-The project metadata schema defines the structure for storing project information including name, description, creation date, global tags, and statistics. The metadata file persists across sessions.
-
-The project selector integrates into the chat interface, allowing users to switch between active projects. Switching projects loads the appropriate index and database connections.
-
-The project statistics tracking monitors document counts, storage usage, and search activity for each project.
-
-### Milestones
-
-| Milestone | Description | Acceptance Criteria |
-|--|--|--|
-| M2.1 | Project CRUD operations | Users can create, read, update, and delete projects through the interface |
-| M2.2 | Project metadata persistence | Project metadata survives application restarts and is correctly loaded |
-| M2.3 | Project selector in chat | Users can switch active projects from the chat interface; switching loads correct data |
-| M2.4 | Project statistics display | Statistics section shows accurate metrics for each project |
-| M2.5 | Project isolation verification | Documents from one project are not accessible from another project |
-
-## 4. Phase 3: Ingestion Pipeline
-
-### Duration: Week 5-6
-
-### Objective
-
-The ingestion pipeline phase implements document processing and indexing for each project. This phase delivers the capability to upload files, generate embeddings, and populate the vector index.
-
-### Key Activities
-
-The file upload interface provides a multi-file uploader with project destination selection. The interface displays processing progress and logs in real-time.
-
-The text extraction module handles various file formats including text, markdown, PDF, DOCX, CSV, JSON, and code files. Each format uses a dedicated extraction adapter.
-
-The embedding generation integrates the Gleann engine as the primary embedding provider. The system implements fallback to Mistral and DeepSeek embeddings when Gleann is unavailable.
-
-The database insertion and index update logic stores documents in SQLite and updates the HNSW index. The system handles index resizing when capacity is reached.
-
-The duplicate detection identifies and removes redundant documents based on text links.
-
-### Milestones
-
-| Milestone | Description | Acceptance Criteria |
-|--|--|--|
-| M3.1 | File upload interface | Users can upload multiple files and select destination project |
-| M3.2 | Text extraction for all formats | All supported file formats extract text correctly |
-| M3.3 | Embedding generation with Gleann | Gleann generates embeddings for uploaded documents |
-| M3.4 | Embedding fallback chain | System falls back to Mistral and DeepSeek when Gleann fails |
-| M3.5 | Database and index population | Documents are correctly stored in SQLite and indexed in HNSW |
-| M3.6 | Duplicate detection | Duplicate documents are identified and removed |
-
-## 5. Phase 4: RAG Integration in Chat
-
-### Duration: Week 7-8
+## 4. Next phase: RAG ingestion
 
 ### Objective
 
-The RAG integration phase connects the search engine to the chat interface. This phase enables the model to retrieve relevant context and generate enriched responses.
+Turn `views/ingest.py` into a real ingestion page and populate a vector
+index that queries in the chat can retrieve from.
 
-### Key Activities
+### Scope
 
-The search engine implementation provides hybrid search combining vector similarity with tag filtering. The search engine retrieves candidate documents from the active project's HNSW index and SQLite database.
+- **Ingestion UI**: multi-file uploader, destination project selector,
+  quick/deep processing choice, live progress log.
+- **Text extraction**: reuse `utils/file_handler.py` for the file formats
+  already supported in chat attachments.
+- **Chunking**: sliding window over character count, configurable per
+  ingestion.
+- **Embedding**: gleann + EmbeddingGemma as the target. API fallback if
+  gleann is not available on the platform.
+- **Storage**: chunks table with embedding BLOB, tags JSON, and content.
+  HNSW index shared across projects.
+- **Chunk lifecycle**: mark the parent conversation `pending_reindex = 1`
+  when chunks are added, removed, or reassigned.
 
-The context construction module builds enriched prompts by inserting retrieved documents into the system prompt. The context includes document titles, similarity scores, and content snippets.
+### Non-goals for this phase
 
-The model decision flow determines when RAG context is necessary and how to utilize retrieved documents. The model assesses relevance, extracts information, and constructs responses with source citations.
+- Retrieval from the chat. Ingestion produces data; consumption comes next.
+- Deep processing with an LLM (extraction of semantic units, tag
+  generation). Quick mode first, deep mode later.
+- Cross-project search.
 
-The source display in the chat interface shows which documents were used in each response. Users can expand sources to view full document content.
-
-The RAG toggle in the chat interface allows users to enable or disable context retrieval for the current session.
-
-### Milestones
-
-| Milestone | Description | Acceptance Criteria |
-|--|--|--|
-| M4.1 | Hybrid search engine | Search engine retrieves relevant documents using vector similarity and optional tag filters |
-| M4.2 | Context construction | System builds enriched prompts with retrieved documents and similarity scores |
-| M4.3 | Model decision flow | Model correctly assesses document relevance and constructs responses with citations |
-| M4.4 | Source display in chat | Users can view and expand sources used in each response |
-| M4.5 | RAG toggle functionality | Users can enable or disable RAG retrieval per session |
-| M4.6 | Response quality evaluation | Responses with RAG context are more accurate and informative than without |
-
-## 6. Phase 5: Deep Processing and Optimization
-
-### Duration: Week 9-10
+## 5. Phase after RAG ingestion: RAG retrieval
 
 ### Objective
 
-The deep processing and optimization phase enhances the ingestion pipeline with semantic analysis and optimizes system performance. This phase delivers advanced features for improved retrieval quality.
+Connect the chat flow to the vector index. Retrieved chunks enrich the
+system prompt when the active conversation belongs to a project with
+indexed documents.
 
-### Key Activities
+### Scope
 
-The deep processing mode integrates a language model for semantic analysis. The model extracts semantic units from text chunks, generates page summaries, and assigns descriptive tags.
+- **Retrieval integration** in `llm/api_clients.py`: extend the context
+  builder with an optional retrieved-context argument.
+- **RAG toggle** in the toolbar (per-session opt-in).
+- **Query embedding + HNSW search** with adaptive over-retrieval to
+  compensate for post-filtering selectivity (see architecture §4.1).
+- **Source display**: an expander below each RAG-informed response listing
+  the chunks used with their similarity scores.
 
-The sliding window implementation divides documents into overlapping chunks with configurable size and overlap parameters. The system processes each chunk independently.
+### Non-goals
 
-The tag management system combines folder-based tags with model-generated tags. The system normalizes tags to ensure consistency and removes duplicates.
+- Reranking, learning-to-rank, personalization.
+- Automatic RAG-on decisions by the model. The user controls the toggle.
 
-The caching system implements caching for query embeddings, search results, and response generation. This reduces latency for repeated queries.
+## 6. Phase after RAG retrieval: deep processing + optimization
 
-The parallel processing capability processes multiple documents concurrently when resources allow. This reduces ingestion time for large document sets.
+### Objective
 
-The performance monitoring tracks pipeline metrics including embedding time, search time, and response generation time.
+Improve retrieval quality with semantic pre-processing and cache the hot
+paths.
 
-### Milestones
+### Scope
 
-| Milestone | Description | Acceptance Criteria |
-|--|--|--|
-| M5.1 | Deep processing mode | System extracts semantic units, generates summaries, and assigns tags using language model |
-| M5.2 | Sliding window segmentation | Documents are divided into overlapping chunks with configurable parameters |
-| M5.3 | Tag combination and normalization | Tags from folders and model are combined and normalized without duplicates |
-| M5.4 | Caching implementation | Query embeddings and search results are cached; repeated queries have reduced latency |
-| M5.5 | Parallel processing | Multiple documents process concurrently; ingestion time improves for large sets |
-| M5.6 | Performance monitoring | System tracks and displays pipeline performance metrics |
-| M5.7 | System optimization | Overall system performance meets target benchmarks for latency and throughput |
+- **Deep mode ingestion**: pass chunks through a small local LLM to
+  extract semantic units, summaries, and tags.
+- **Tag-based filtering** at query time.
+- **Query embedding cache** (in-memory).
+- **Search result cache** keyed by (project_id, query_hash) with short TTL.
+- **Reindex worker**: consume the `pending_reindex = 1` rows in the
+  background, reindex their chunks, clear the flag.
 
-## 7. Timeline Summary
+## 7. Uncommitted future
 
-| Phase | Duration | Key Deliverables | Dependencies |
-|--|--|--|--|
-| Phase 1: Foundation | Week 1-2 | Modular architecture, centralized configuration | None |
-| Phase 2: Project Management | Week 3-4 | Project CRUD, project selection | Phase 1 |
-| Phase 3: Ingestion Pipeline | Week 5-6 | File upload, embedding generation, indexing | Phase 2 |
-| Phase 4: RAG Integration | Week 7-8 | Search engine, context construction, source display | Phase 3 |
-| Phase 5: Deep Processing | Week 9-10 | Semantic analysis, caching, optimization | Phase 4 |
+Items that are on the mental list but not scheduled:
 
-## 8. Risk Management
+- **Agent loop for code mode**: fill in what the "code" toggle does today
+  (nothing) with a filesystem/git tool-calling loop. See `agentloop.md` for
+  the design plan.
+- **Backup-to-zip on project delete**: currently `delete_project` warns
+  about no undo. Snapshot the project (metadata + associated chats + eventual
+  chunks) to a zip before hard-deleting.
+- **Import projects from zip**: symmetric restore path.
+- **Provider-specific effort mapping**: the `bajo/medio/alto` selector currently
+  maps to `temperature` for three providers and to `reasoning_effort` for
+  DeepSeek. Anthropic supports extended thinking; wiring that in would give
+  the "alto" setting more meaning there.
 
-### Technical Risks
+## 8. Explicit non-goals
 
-The Gleann embedding engine may not function correctly on all systems. The fallback chain to Mistral and DeepSeek mitigates this risk. The system should test all embedding providers during Phase 3.
+These will not happen unless the reason for their exclusion changes:
 
-The HNSW index may experience performance degradation with large document sets. The index resizing and optimization mechanisms address this risk. The system should monitor index performance during Phase 5.
+- Multi-user authentication.
+- Remote-hosted deployment as a service.
+- Cross-project search from the chat UI.
+- Automatic RAG-on decisions by the model based on query classification.
+- A plugin system.
 
-### Schedule Risks
+## 9. Risks
 
-The deep processing mode requires integration with a language model API. API availability and rate limits may affect development progress. The system should implement robust retry mechanisms and fallback strategies.
-
-The parallel processing implementation may introduce concurrency issues. The system should implement proper synchronization and error handling.
-
-### Mitigation Strategies
-
-Each phase includes testing and validation milestones. The system should conduct integration testing after each phase to identify issues early.
-
-The system should maintain backward compatibility with existing chat functionality throughout the development process. This ensures that users can continue using the application during development.
-
-## 9. Success Criteria
-
-The roadmap succeeds when the following criteria are met. The system supports multiple isolated projects with independent data stores. Users can upload documents to projects and search them through the chat interface. The model generates responses enriched with relevant context from the active project. The system maintains performance and reliability under expected usage patterns.
-
-The final evaluation should compare system performance before and after RAG integration. Metrics include response accuracy, response completeness, and user satisfaction.
+- **RAG design assumptions are unverified**: the post-filtering / adaptive
+  over-retrieval strategy has never been measured against a real corpus.
+  If it degrades badly, the fallback is namespace partitioning inside the
+  graph, which is more work.
+- **gleann portability**: the primary embedder is a personal project that
+  is not yet packaged. If it's not ready in time, the RAG ingestion phase
+  starts against API embeddings, which is slower and less private.
+- **UI creep**: adding RAG UI, source expanders, RAG toggle, deep-mode
+  options, and eventually agent-loop step visibility will pressure the
+  toolbar and chat view. Some of it will need to move somewhere else
+  before it becomes crowded.

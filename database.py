@@ -358,6 +358,23 @@ class ChatDatabase:
             )
             conn.commit()
 
+    def get_conversation_project(self, conversation_id: int) -> Optional[Dict]:
+        """Retorna el proyecto asociado a la conversación, o None si no tiene.
+
+        Un JOIN limpio en lugar de dos queries desde el caller.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT p.*
+                FROM projects p
+                INNER JOIN conversations c ON c.project_id = p.id
+                WHERE c.id = ?
+            ''', (conversation_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
     def get_conversations_grouped(self) -> List[Dict]:
         """Devuelve las conversaciones agrupadas por proyecto, listas para renderizar.
 

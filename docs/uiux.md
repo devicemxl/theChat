@@ -1,127 +1,259 @@
-# User Interface Proposal[](#user-interface-proposal)
+# UI/UX
 
-| key             | value                                                                |
-|-----------------|----------------------------------------------------------------------|
-| tipo            | technical document · user interface design                           |
-| tema            | UI/UX · Streamlit · RAG chat interface                               |
-| titulo          | Multi-Project RAG Chat User Interface                                |
-| parte           | VI — System Architecture                                             |
-| maturity        | draft for review                                                     |
-| confidence      | high (concept) · medium (final implementation)                       |
-| material origen | June 2026 conversation — UI design for multi-project RAG integration |
-| fecha           | 2026-06-08                                                           |
-| mantenedor      | David                                                                |
+| key             | value                                                             |
+|-----------------|-------------------------------------------------------------------|
+| tipo            | technical document · user interface design                        |
+| tema            | UI/UX · Streamlit · personal chat interface                       |
+| titulo          | theChat User Interface                                            |
+| maturity        | current implementation + planned additions                        |
+| confidence      | high (current) · medium (planned)                                 |
+| material origen | development log through August 2026                               |
+| fecha           | 2026-08-31                                                        |
+| mantenedor      | David                                                             |
 
-## 1. Layout Overview[](#1-layout-overview)
+## 1. Scope
 
-The application adopts a three-tab structure to separate the main functional areas. The tabs are Chat, Projects, and Ingestion. This organization provides clear navigation and prevents cognitive overload by isolating distinct workflows.
+This document describes the interface as it exists today and the additions
+planned for the RAG phases. Current-state sections describe code that ships.
+Planned sections describe intent — subject to revision when they land.
 
-The sidebar maintains consistent access to conversation history, export/import functionality, statistics, and API configuration across all tabs. This persistent sidebar ensures that global controls remain accessible regardless of the active tab.
+The interface uses Streamlit 1.62+. Design targets a single-user local app
+running on desktop or mobile browser.
 
-## 2. Chat Tab[](#2-chat-tab)
+## 2. Navigation
 
-### 2.1 Header Area[](#2-1-header-area)
+Three top-level views registered through `st.navigation`:
 
-The header displays the active project name with a project selector dropdown. A badge indicates whether RAG search is enabled for the current session. The header also shows conversation metadata including message count, reformulation count, and active provider.
+- **Chat** — the main conversation interface (default view).
+- **Projects** — CRUD for projects: create, edit, delete.
+- **Data** — placeholder page for the planned RAG ingestion UI.
 
-A toggle switch labeled "Search in Project" controls whether RAG retrieval is active. When disabled, the chat operates as a standard conversational interface without context enrichment.
+Navigation lives in Streamlit's own sidebar section, above whatever each
+view adds. `initial_sidebar_state="expanded"` so the nav is visible on
+first load; a user in a narrower viewport can collapse it.
 
-### 2.2 Message Display[](#2-2-message-display)
+The sidebar contents beyond navigation are page-scoped. Only `views/chat.py`
+renders the conversation history / export / import / stats sections.
 
-User messages appear right-aligned with a distinct background color. Assistant messages appear left-aligned with standard styling. When a user message includes file attachments, the files appear in expandable panels below the message text, each showing the filename and content preview.
+## 3. Chat view
 
-Assistant responses that used RAG context display a "Sources" expander below the response text. This expander lists the documents retrieved and used, showing the document title, similarity score, and a snippet of the content. Users can expand each source to view the full text.
+### 3.1 Top toolbar
 
-### 2.3 Input Area[](#2-3-input-area)
+An `st.expander` at the top of the view holds all session controls in six
+columns:
 
-The input area consists of a chat input field for text entry and a file uploader for attachments. The file uploader accepts multiple files and displays the list of selected files with their sizes above the input field. After sending a message, the uploader resets automatically.
+| col | control                                                    |
+|-----|------------------------------------------------------------|
+| 1   | AI provider (DeepSeek / Gemini / Mistral / Anthropic)      |
+| 2   | Agent mode (chat / code) — code mode has no effect yet     |
+| 3   | Effort (bajo / medio / alto) — maps to temperature or `reasoning_effort` depending on provider |
+| 4   | File attachment uploader (multi-file)                      |
+| 5   | Project selector (— Sin proyecto — / list of projects)     |
+| 6   | Clear-conversation button (opens confirmation modal)       |
 
-The input area includes contextual actions near the input field, such as a "Clear Conversation" button to reset the current session.
+Below the columns, an `st.info` line shows the most relevant status message,
+ordered by priority:
 
-## 3. Projects Tab[](#3-projects-tab)
+1. API key missing warning (blocks the view — returns from `main`)
+2. Attached files summary (`📎 Archivos adjuntos: ...`)
+3. Code mode notice
+4. Active project system-prompt indicator (`🔧 System-prompt del
+   proyecto ... activo`)
+5. Default (`Enjoy It`)
 
-### 3.1 Project List[](#3-1-project-list)
+Only one line shows at a time. Lower-priority messages are suppressed when
+higher-priority ones apply.
 
-The projects tab displays all available projects in a structured list. Each project entry shows the project name, description, creation date, document count, and storage size. A status indicator shows whether the project index is loaded and ready for search.
+The expander header itself shows conversation metadata:
 
-Clicking on a project expands its details, showing global tags, recent documents, and usage statistics. The expanded view includes action buttons for loading the project, editing project metadata, and deleting the project.
+```
+Conversación #<id> | Mensajes: <N> | Reformulaciones: <N> | Provider: <name>
+```
 
-### 3.2 Create Project[](#3-2-create-project)
+### 3.2 Message display
 
-A "New Project" button opens a form with fields for project name, description, and global tags. The system validates that the project name is unique and creates the directory structure, database, and index upon submission.
+Standard `st.chat_message` blocks, `user` and `assistant` roles, with
+Streamlit's default alignment and background.
 
-### 3.3 Project Configuration[](#3-3-project-configuration)
+When a user turn includes file attachments, the file contents render in
+`st.expander` blocks below the visible prompt text — one expander per file,
+labeled with the filename, containing the extracted text as a code block.
 
-Each project has a configuration panel accessible from the project list. This panel allows editing the project name, description, and global tags. It also displays the embedding model in use and allows changing the model if multiple options are available.
+Each assistant turn ends with a copy-to-clipboard button
+(`ui/components.py::add_copy_button`) that copies the Markdown source of
+the message.
 
-## 4. Ingestion Tab[](#4-ingestion-tab)
+If a message was truncated (streaming interrupted, saved as partial), a
+caption `⚠️ *Mensaje truncado*` appears below it. If a message resulted
+from one or more reformulations, a caption
+`🔄 *Reformulado N veces*` appears below it.
 
-### 4.1 File Upload Area[](#4-1-file-upload-area)
+### 3.3 Input area
 
-The ingestion tab provides a large drop zone for uploading multiple files. Supported file types include text, markdown, PDF, DOCX, CSV, JSON, and code files. The system displays the list of selected files with their sizes and types before processing.
+`st.chat_input` at the bottom. Files are attached via the toolbar's uploader
+before typing, then sent along with the message. The uploader auto-resets
+after each send by rotating a session_state key (`uploader_key`).
 
-### 4.2 Processing Options[](#4-2-processing-options)
+### 3.4 Streaming feedback
 
-Users select the destination project from a dropdown. They choose between two processing modes: Quick and Deep. Quick mode generates embeddings directly from the extracted text. Deep mode uses a language model to extract semantic units, generate summaries, and assign tags.
+Assistant responses stream token-by-token into an `st.empty()` placeholder
+inside the assistant's `st.chat_message` block, with a trailing `▌` cursor
+during the stream. On completion, the placeholder is replaced with the
+final text.
 
-Advanced options include chunk size, overlap percentage, and manual tag assignment. These options appear in an expandable "Advanced Settings" panel.
+If the user reloads or navigates during a stream, the partial response is
+saved as a truncated message on the next turn, so nothing is silently lost.
 
-### 4.3 Progress and Logs[](#4-3-progress-and-logs)
+### 3.5 Sidebar (chat view only)
 
-During processing, the interface displays a progress bar showing the percentage of documents processed. A live log area shows real-time status messages for each document, including extraction time, embedding time, and any errors encountered.
+- Session timestamp caption
+- "New Conversation" button
+- **📚 Historial** — grouped by project:
+  - One expander per project (labeled with emoji, name, chat count)
+  - Chats render as compact rows: `[▶️/📄 Title] [✏️] [🗑️]`
+  - `▶️` marks the currently active chat, styled as primary button
+  - Empty projects show their header with `_Sin conversaciones_`
+  - The group containing the active chat auto-expands
+  - A "Sin proyecto" group always appears at the end
+- Rename and delete each open a `@st.dialog` modal
+- **📤 Exportar** — download current chat or full history as JSON
+- **📂 Importar** — upload JSON to restore conversations
+- **📊 Estadísticas** — conversation count, message count, truncation
+  metrics
 
-Upon completion, the system shows a summary with the number of documents processed, the number of semantic units created, and the total processing time. Errors are highlighted for user attention.
+## 4. Projects view
 
-## 5. Sidebar[](#5-sidebar)
+### 4.1 List
 
-### 5.1 Conversation Management[](#5-1-conversation-management)
+Each project renders inside `st.container(border=True)`:
 
-The sidebar includes a "New Conversation" button and a history section listing all conversations. Each conversation entry shows its title, message count, and last update time. Users can load, rename, or delete conversations from this section.
+```
+┌────────────────────────────────────────────┐
+│ [color] 🌱 Raitec  · 12 chat(s)     ✏️ 🗑️ │
+│   Description text here.                   │
+│   ▸ Ver system prompt                      │
+└────────────────────────────────────────────┘
+```
 
-### 5.2 Export and Import[](#5-2-export-and-import)
+- A colored square (`color` field) as an inline marker
+- Emoji + name in bold
+- Chat count in muted text
+- Optional description as caption
+- Optional system prompt in a nested expander
+- Edit and delete buttons per row
 
-An export section provides buttons to download the current conversation or all conversations as JSON files. An import section allows uploading JSON files to restore previously exported conversations.
+### 4.2 Create / edit / delete modals
 
-### 5.3 Statistics[](#5-3-statistics)
+Three `@st.dialog` modals:
 
-A statistics section displays key metrics including total conversations, total messages, truncated messages, and conversations with truncation. These metrics use Streamlit's metric components for visual clarity.
+- **New project**: name (required, UNIQUE), emoji (free text input, default
+  📁), color (selectbox from 8-color palette with a color-strip preview),
+  description, system prompt.
+- **Edit project**: same fields, pre-populated. Prompt hint reminds the user
+  that a non-empty prompt replaces the default.
+- **Delete project**: shows how many chats will be reassigned to "Sin
+  proyecto", warns that the action is not undoable. Includes a note that
+  the backup-to-zip feature is not implemented yet.
 
-### 5.4 API Configuration[](#5-4-api-configuration)
+All modals validate name uniqueness (via `sqlite3.IntegrityError`) and
+non-empty name (via `ValueError` raised by `create_project` /
+`update_project`).
 
-An API configuration section allows users to select the AI provider from a list of available options. The section displays the current API key status and provides a secure input field for updating keys when necessary.
+## 5. Data view (stub)
 
-## 6. Visual Design[](#6-visual-design)
+Currently: a title, an "under construction" info block, and a bullet list
+outlining the planned RAG components. When the RAG ingestion phase lands,
+this view will host the multi-file uploader, destination selector, and
+progress log described in `pipeline.md`.
 
-### 6.1 Color Scheme[](#6-1-color-scheme)
+## 6. Interaction patterns
 
-The interface uses a clean, professional color palette. Primary actions use a distinct accent color, while secondary elements use neutral grays. User messages and assistant messages have distinct background colors for easy differentiation.
+### 6.1 Confirmations
 
-### 6.2 Typography[](#6-2-typography)
+Destructive actions use `@st.dialog` modals with a warning message, a red
+primary button for the destructive action, and a secondary cancel button:
 
-The interface uses standard system fonts with appropriate sizing. Headers use larger font sizes to establish hierarchy. Code blocks and file contents use monospace fonts for readability.
+- Clear current conversation (from chat toolbar)
+- Delete conversation (from sidebar row)
+- Delete project (from projects list)
 
-### 6.3 Responsive Layout[](#6-3-responsive-layout)
+The modals do not block the underlying view; canceling simply reruns.
 
-The layout adapts to different screen sizes. The sidebar collapses on smaller screens. The chat area maintains readability by adjusting message width. The projects and ingestion tabs stack vertically on narrow screens.
+### 6.2 Herencia de proyecto on new conversation
 
-## 7. Interaction Patterns[](#7-interaction-patterns)
+When "New Conversation" is pressed while inside a chat that belongs to a
+project, the new conversation is created inside the same project. The user
+can move it to another project (or to "Sin proyecto") via the toolbar
+selector.
 
-### 7.1 Project Switching[](#7-1-project-switching)
+### 6.3 Empty-conversation cleanup
 
-When the user switches projects, the system saves the current conversation state, loads the new project's index, and starts a fresh conversation context. A confirmation dialog appears if the current conversation has unsaved messages.
+The cleanup is silent — no toast, no confirmation. Empty conversations
+are removed on startup and on switch. The active conversation is always
+protected from the sweep.
 
-### 7.2 RAG Toggle[](#7-2-rag-toggle)
+### 6.4 System-prompt substitution feedback
 
-The RAG toggle provides immediate feedback. When enabled, a brief indicator appears showing that context retrieval is active. The system caches the search results for the current question to avoid redundant queries.
+When the active chat belongs to a project with a system prompt, the
+toolbar's status line makes this visible with the project's emoji and
+name. This is the only surface where the substitution is announced;
+there is no per-message annotation.
 
-### 7.3 Source Display[](#7-3-source-display)
+## 7. Visual design
 
-The "Sources" expander appears only when the assistant response used RAG context. Each source entry shows the document title, similarity score, and a snippet. Users can expand each source to view the full document content.
+- Streamlit defaults for typography and spacing.
+- Custom CSS in `ui/components.py::load_custom_css` for: sidebar max width
+  (300px), hidden menu, adjusted main container padding, expander border
+  for user-attachment blocks.
+- The custom CSS loads in `app.py`, once per session.
+- Project colors from a fixed 8-color palette (`utils/constants.py`).
+  Emojis are free text — no curated list.
 
-### 7.4 Error Handling[](#7-4-error-handling)
+## 8. Mobile
 
-Error messages appear as toast notifications for transient issues and as inline alerts for persistent problems. The system provides clear guidance on how to resolve configuration errors, such as missing API keys or unavailable embedding models.
+The chat is used primarily on mobile. Concessions and known limitations:
 
-## 8. Accessibility Considerations[](#8-accessibility-considerations)
+- Six-column toolbar wraps on narrow viewports; readable but not elegant.
+- `@st.dialog` modals work correctly and are more usable than the previous
+  inline-editing pattern.
+- Sidebar collapses on narrow screens; user can still open it to navigate
+  or check history.
+- Streaming rendering is smooth on modern mobile Chrome / Safari.
 
-The interface supports keyboard navigation for all interactive elements. Color contrast meets WCAG guidelines for readability. Screen reader labels are provided for all form elements and interactive components.
+## 9. Planned additions (not implemented)
+
+### 9.1 RAG toggle in the toolbar
+
+A toggle to enable/disable retrieval per session, once the retrieval phase
+lands. Off by default; on requires the active chat to be in a project with
+indexed documents.
+
+### 9.2 Source panel below RAG-informed responses
+
+An `st.expander` below each assistant response that used retrieval,
+listing chunks with source document names, similarity scores, and snippets.
+
+### 9.3 Reindex indicator
+
+Chats with `pending_reindex = 1` show a small `🔄` next to their title in
+the sidebar. Purely visual — no interaction.
+
+### 9.4 Move-a-chat confirmation
+
+When RAG is populated, changing a chat's project via the selector opens a
+modal explaining that reindexing is required, offering blocking or
+background modes.
+
+### 9.5 Agent loop visualization
+
+When code mode is actually implemented (see `agentloop.md`), each tool call
+renders in an expander inside the assistant's message block, showing the
+tool name, arguments, and result. Approval panel appears below the final
+response summarizing the aggregated diff.
+
+## 10. Accessibility
+
+Streamlit's default keyboard navigation covers most interactions.
+`@st.dialog` modals trap focus while open. Color is never the only signal
+for state (buttons carry text, project markers appear next to labels, not
+alone).

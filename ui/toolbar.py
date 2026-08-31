@@ -211,6 +211,23 @@ def render_toolbar():
                 # Abre el modal de confirmación en vez de limpiar directo.
                 confirm_clear_conversation()
 
+        # Indicador de system-prompt del proyecto (si aplica).
+        # Se aplica DESPUÉS de los checks de columnas para no borrar el warning
+        # de "falta API key" (más urgente), y ANTES del st.info final. Los
+        # mensajes de acción activa (archivos adjuntos, modo Code) tienen
+        # prioridad y ya sobreescribieron msgX arriba si aplica; por eso solo
+        # sobreescribimos si msgX sigue siendo el default "Enjoy It".
+        if api_key_ok and msgX == "Enjoy It":
+            active_project = st.session_state.db.get_conversation_project(
+                st.session_state.current_conversation_id
+            )
+            if active_project and active_project.get("system_prompt"):
+                msgX = (
+                    f"🔧 System-prompt del proyecto **{active_project['icon']} "
+                    f"{active_project['name']}** activo — reemplaza al default "
+                    "y omite la lógica de reformulación."
+                )
+
         st.info(msgX)
 
     return uploaded_files, api_key_ok

@@ -41,6 +41,12 @@ def main():
     if not api_key_ok:
         return
 
+    # El proyecto activo se consulta acá también para pasar su system_prompt
+    # al build_context más abajo. El indicador visual vive dentro del toolbar.
+    active_project = st.session_state.db.get_conversation_project(
+        st.session_state.current_conversation_id
+    )
+
     # 4. Dibujar Historial de Mensajes
     for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
@@ -139,7 +145,8 @@ def main():
             api_messages = build_context_with_reformulation_awareness(
                 st.session_state.messages,
                 is_reformulation,
-                st.session_state.reformulation_count
+                st.session_state.reformulation_count,
+                project_system_prompt=(active_project.get("system_prompt") if active_project else None),
             )
 
             try:

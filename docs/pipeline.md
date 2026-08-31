@@ -1,191 +1,238 @@
-# Pipeline and Model Decision Flow[](#pipeline-and-model-decision-flow)
+# RAG Pipeline (planned)
 
-| key             | value                                                                      |
-|-----------------|----------------------------------------------------------------------------|
-| tipo            | technical document · system architecture                                   |
-| tema            | software architecture · RAG · pipeline design                              |
-| titulo          | RAG Pipeline and Model Decision Flow                                       |
-| parte           | VI — System Architecture                                                   |
-| maturity        | draft for review                                                           |
-| confidence      | high (concept) · medium (final implementation)                             |
-| material origen | June 2026 conversation — pipeline design for multi-project RAG integration |
-| fecha           | 2026-06-08                                                                 |
-| mantenedor      | David                                                                      |
+| key             | value                                                             |
+|-----------------|-------------------------------------------------------------------|
+| tipo            | technical document · planned pipeline design                      |
+| tema            | RAG · ingestion pipeline · query pipeline                         |
+| titulo          | RAG Pipeline for theChat                                          |
+| maturity        | design plan — no implementation exists yet                        |
+| confidence      | medium (concept) · low (final implementation)                     |
+| material origen | design discussions through August 2026                            |
+| fecha           | 2026-08-31                                                        |
+| mantenedor      | David                                                             |
 
-## 1. Pipeline Overview[](#1-pipeline-overview)
+## 1. Status
 
-The system implements a retrieval augmented generation pipeline that transforms user queries into context-enriched responses. The pipeline operates in two distinct phases: the ingestion phase, which prepares documents for retrieval, and the query phase, which retrieves relevant context and generates responses.
+This document describes the retrieval-augmented pipeline planned for theChat.
+As of this writing, none of it is implemented. The `views/ingest.py` page is
+a stub. No embedding, no indexing, no retrieval code exists in the
+repository. The database schema already carries two columns (`indexed_at`,
+`pending_reindex`) as silent preparation, but nothing writes to them yet.
 
-The pipeline is designed to be modular and configurable. Each stage operates independently, allowing for individual optimization and replacement. The system maintains clear interfaces between stages to facilitate testing and debugging.
+Numbers, sequencing, and specific library choices are working hypotheses
+that will be validated when implementation starts.
 
-## 2. Ingestion Pipeline[](#2-ingestion-pipeline)
+## 2. Design intent
 
-### 2.1 Document Acquisition[](#2-1-document-acquisition)
+The pipeline handles two flows:
 
-The ingestion pipeline begins with document acquisition. Users upload files through the Streamlit interface or place files in designated project directories. The system supports multiple file formats including plain text, markdown, PDF, DOCX, CSV, JSON, and source code files.
+- **Ingestion**: user uploads documents to a project → text is extracted,
+  chunked, optionally analyzed by a small LLM, embedded, and stored.
+- **Query**: user asks a question in a chat → the question is embedded, the
+  vector index returns candidate chunks, metadata filters narrow them by
+  project (and optionally by tag), the top-K are formatted into a system
+  prompt and passed to the chat's provider.
 
-The acquisition stage validates file integrity, checks for duplicates, and assigns unique identifiers to each document. Files are stored temporarily before processing begins.
+Design principles carry over from the main architecture: local storage, no
+service layer, no queue. The pipeline is a set of functions that run inside
+the same Streamlit process.
 
-### 2.2 Text Extraction[](#2-2-text-extraction)
+## 3. Ingestion pipeline
 
-The text extraction stage converts uploaded files into plain text. Each file type uses a dedicated extraction adapter. PDF files use a PDF reader library, DOCX files use a document processing library, and text-based formats use direct decoding.
+### 3.1 Acquisition
 
-The extraction stage handles encoding detection and normalization. Unicode normalization ensures consistent text representation across different source formats.
+Files arrive through a multi-file uploader in `views/ingest.py`. The user
+selects the destination project explicitly. Supported formats mirror the
+chat attachment set: text, markdown, PDF, DOCX, CSV, JSON, code files.
 
-### 2.3 Text Segmentation[](#2-3-text-segmentation)
+Duplicate detection uses a content hash. If a document already exists in
+the target project with the same hash, the upload is skipped and the user
+is told.
 
-The segmentation stage divides extracted text into manageable chunks. The system uses a sliding window approach with configurable chunk size and overlap parameters. This approach preserves contextual continuity between adjacent chunks.
+### 3.2 Text extraction
 
-For deep processing mode, each chunk represents a semantic unit for further analysis. For quick processing mode, chunks are used directly for embedding generation.
+One adapter per format. PDFs via `pypdf`, DOCX via `python-docx`, CSV/JSON
+as plain text, code files as plain text with encoding detection. Extraction
+adapters live in `utils/file_handler.py` alongside the ones already used
+for chat attachments — same code path.
 
-### 2.4 Semantic Analysis (Deep Mode)[](#2-4-semantic-analysis-deep-mode)
+Unicode normalization is applied uniformly. Extracted text is not stored
+raw at document level — it is stored as chunks (see below).
 
-In deep processing mode, each chunk is sent to a language model for semantic analysis. The model performs three tasks: extracting semantic units, generating page summaries, and assigning descriptive tags.
+### 3.3 Chunking
 
-The semantic unit extraction identifies coherent ideas or paragraphs within each chunk. The page summary provides a concise overview of the chunk content. The tag assignment generates 2-5 descriptive labels that capture the key concepts.
+Sliding window over character count, with configurable size and overlap.
+Starting point: 1000 characters with 200 overlap. These numbers will be
+tuned against real corpora, not chosen up front.
 
-The system implements a retry mechanism for failed analyses. After three attempts, the system falls back to using the raw text as the semantic unit with generic tags.
+Each chunk records:
 
-### 2.5 Embedding Generation[](#2-5-embedding-generation)
+- source document ID
+- position (offset in the source)
+- text
+- content hash (for deduplication and change detection)
 
-The embedding generation stage converts text chunks into vector representations. The primary embedding engine is Gleann with EmbeddingGemma, operating locally for speed and privacy.
+### 3.4 Deep analysis (optional)
 
-Each text chunk is prefixed appropriately before embedding. Documents use the document prefix, queries use the query prefix, and similarity comparisons use the similarity prefix. This asymmetric approach optimizes retrieval quality.
+When "deep mode" is selected, each chunk is passed through a small local
+LLM to produce:
 
-If the primary engine fails, the system falls back to Mistral embedding API. DeepSeek embedding serves as a final alternative.
+- a one-sentence summary
+- 2-5 descriptive tags
 
-### 2.6 Storage and Indexing[](#2-6-storage-and-indexing)
+Candidate models: Qwen3-0.6B, OpenELM-270M, or another small model exposed
+via nxDeck. Failures fall back to storing the chunk with an empty summary
+and no tags — no ingestion is blocked because of an analysis failure.
 
-The storage stage inserts documents into the project's SQLite database and HNSW index. Each document record includes the embedding as a binary blob, the text link, tags as serialized JSON, and full content.
+Deep mode is opt-in per ingestion because it multiplies processing time
+significantly.
 
-The HNSW index is updated incrementally. When the index reaches capacity, the system resizes it by doubling the maximum elements. The index metadata is updated after each modification.
+### 3.5 Embedding
 
-### 2.7 Deduplication[](#2-7-deduplication)
+Primary target: gleann + EmbeddingGemma, 512-dim vectors with block-wise
+int8 quantization. Documents use the document prefix; queries use the query
+prefix. This asymmetric prefixing is standard for embedding models trained
+that way and is not optional.
 
-The deduplication stage removes redundant documents. The system identifies duplicates based on text links and retains only the most recent version. This prevents index bloat and ensures search quality.
+If gleann is unavailable on the current platform, an API-based fallback
+(Mistral or DeepSeek embed) is used. The fallback is for portability, not
+for a resilience story.
 
-## 3. Query Pipeline[](#3-query-pipeline)
+### 3.6 Storage and indexing
 
-### 3.1 Query Reception[](#3-1-query-reception)
+Each chunk is inserted into SQLite with its embedding as a BLOB and its
+tags as JSON. The chunk's ID is added to the HNSW index. The index is
+shared across projects; project isolation happens through metadata
+filtering at query time (see §5.1).
 
-The query pipeline begins when the user submits a message in the chat interface. The system captures the query text, identifies the active project, and determines whether RAG search is enabled.
+Index resizing follows the standard HNSW pattern: double `max_elements`
+when the index reaches capacity.
 
-### 3.2 Query Preprocessing[](#3-2-query-preprocessing)
+## 4. Query pipeline
 
-The preprocessing stage cleans and normalizes the query text. The system detects whether the query is a reformulation of a previous question. Reformulation detection uses keyword matching to identify phrases like "rephrase," "try again," or "make it clearer."
+### 4.1 Query intake
 
-### 3.3 Embedding Generation[](#3-3-embedding-generation)
+The user types a question in `views/chat.py`. Before the request goes to
+the LLM, the pipeline checks whether RAG is enabled for the current
+session and whether the active conversation belongs to a project that has
+any indexed documents.
 
-The embedding generation stage converts the query into a vector representation. The query uses the query prefix to ensure compatibility with document embeddings. The resulting vector has the same dimensionality as the document embeddings.
+If either check fails, the request goes to the LLM without retrieval — the
+existing chat flow, unchanged.
 
-### 3.4 Vector Search[](#3-4-vector-search)
+### 4.2 Query embedding
 
-The vector search stage queries the active project's HNSW index. The system requests a configurable number of nearest neighbors, typically 50-100 candidates. The search uses cosine similarity to measure vector proximity.
+The question is embedded with the query prefix, producing a 512-dim vector
+compatible with the document embeddings.
 
-The HNSW index returns the identifiers and distances of the nearest neighbors. These identifiers correspond to document IDs in the SQLite database.
+### 4.3 Vector search
 
-### 3.5 Metadata Retrieval[](#3-5-metadata-retrieval)
+The HNSW index returns K candidates. K starts at 50 and adjusts based on
+how selective the project filter is (adaptive over-retrieval, see §5.1).
 
-The metadata retrieval stage fetches document records from SQLite using the identifiers returned by the vector search. The system constructs a SQL query with the appropriate placeholders and retrieves the text links, tags, and content for each candidate.
+### 4.4 Metadata retrieval and filtering
 
-### 3.6 Filtering[](#3-6-filtering)
+Candidate IDs are used to fetch chunk rows from SQLite. The rows are then
+filtered:
 
-The filtering stage applies optional filters to the candidate set. If the user specified a tag filter, the system retains only documents containing that tag. If a similarity threshold is configured, documents below the threshold are discarded.
+- **Project**: keep only chunks belonging to the active project.
+- **Tag** (optional): if the user specified a tag filter, keep only chunks
+  carrying that tag.
+- **Recency of use** (optional): drop chunks already surfaced earlier in
+  the same conversation to reduce repetition.
 
-The filtering stage also removes duplicate documents and documents that were previously used in the conversation to avoid repetition.
+### 4.5 Ranking and cutoff
 
-### 3.7 Ranking[](#3-7-ranking)
+Filtered candidates are sorted by cosine similarity. The top N (starting
+point: 5) survive to context construction.
 
-The ranking stage sorts the filtered candidates by similarity score. Documents with higher similarity scores appear first. The system applies a cutoff to retain only the top-N documents for context construction.
+### 4.6 Context construction
 
-### 3.8 Context Construction[](#3-8-context-construction)
+Retrieved chunks are inlined into the system prompt, each with a header
+containing the source document name and similarity score. The prompt
+instructs the model to prefer the provided context and to say so when the
+context is insufficient.
 
-The context construction stage builds the enriched prompt for the language model. The system inserts the retrieved documents into the system prompt with their similarity scores and content.
+Total context size is capped at a fraction of the model's window (target:
+~4000 tokens of retrieval context, adjustable per provider).
 
-The context format includes document titles, similarity scores, and content snippets. The system limits the total context size to prevent exceeding the model's token limit.
+### 4.7 Response
 
-### 3.9 Response Generation[](#3-9-response-generation)
+The enriched prompt is sent to the selected chat provider through the
+existing streaming client. The UI shows the sources used in an expander
+below the response.
 
-The response generation stage sends the enriched prompt to the selected AI provider. The system supports multiple providers including DeepSeek, Gemini, and Mistral. Each provider uses a dedicated streaming adapter.
+## 5. Cross-cutting decisions
 
-The response is streamed to the user in real-time. The system displays partial responses as they arrive, providing immediate feedback.
+### 5.1 Shared index with metadata filtering
 
-## 4. Model Decision Flow[](#4-model-decision-flow)
+One HNSW index across projects, with `project_id` as a filter applied after
+retrieval, is the starting design. The trade-off is post-filtering recall
+on selective filters (a project with 100 chunks inside a corpus of 1M).
 
-### 4.1 Query Classification[](#4-1-query-classification)
+Mitigation for the first iteration: adaptive over-retrieval — start with
+K=50, expand up to K=1000 if the filtered set is too small. This costs
+bandwidth (up to 1000 IDs transferred and metadata-joined) but keeps the
+index architecture simple.
 
-The model first classifies the query to determine whether RAG context is necessary. The classification considers query complexity, domain specificity, and the presence of technical terms.
+If this proves insufficient in practice, two escalation paths exist:
 
-If the query is a simple factual question, the model may answer directly without context. If the query requires domain knowledge or references specific documents, the model requests RAG context.
+- **Namespace partitioning inside the graph** (chunks from different
+  projects are never neighbors)
+- **Filtered HNSW** (filter evaluated during graph traversal)
 
-### 4.2 Relevance Assessment[](#4-2-relevance-assessment)
+Both are non-trivial to implement well. Neither is scoped for the first
+iteration.
 
-When RAG context is provided, the model assesses the relevance of each retrieved document. The model evaluates whether the document content addresses the query intent and provides useful information.
+### 5.2 Move-a-chat semantics
 
-Documents that are irrelevant or redundant are ignored. The model focuses on the most relevant documents to construct the response.
+Reassigning a chat to a different project today is a single-column UPDATE.
+When chunks and embeddings exist per-conversation, the reassignment must
+propagate to the vector index.
 
-### 4.3 Context Utilization[](#4-3-context-utilization)
+Two planned UX flows:
 
-The model determines how to utilize the retrieved context. It may extract specific facts, synthesize information from multiple documents, or use the context to structure the response.
+- Bloqueante with confirmation modal (like "clear conversation").
+- Instant + background reindex, using the `pending_reindex = 1` flag and
+  the partial index that already exist in the schema.
 
-The model indicates when the context is insufficient to answer the query. In such cases, the model states that the information was not found in the available documents.
+The second option is preferred by default because the reindex latency for
+a single chat can be significant. The first option remains available for
+users who want RAG consistency immediately after a move.
 
-### 4.4 Response Construction[](#4-4-response-construction)
+### 5.3 Caching
 
-The model constructs the response using the relevant context. The response structure adapts to the query type. Factual questions receive direct answers. Analytical questions receive structured explanations with supporting evidence.
+Query embedding: cache by hash of the query text. Same question in
+sequence should not re-embed.
 
-The model cites the sources used in the response. Source citations appear as references to the document titles and similarity scores.
+Search results: cache by (project_id, query_hash) for a short TTL, so
+provider retries and reformulations don't re-search.
 
-### 4.5 Reformulation Handling[](#4-5-reformulation-handling)
+Both caches are in-memory (Python dict + `functools.lru_cache`). No
+external cache.
 
-If the query is a reformulation, the model incorporates the reformulation context. The model reviews the previous response and the user's requested changes. It generates a revised response that addresses the specific concerns raised.
+## 6. Failure modes
 
-## 5. Error Handling and Fallbacks[](#5-error-handling-and-fallbacks)
+### 6.1 Embedding failures
 
-### 5.1 Embedding Failures[](#5-1-embedding-failures)
+If the primary embedder fails on a document, retry twice, then fall back
+to an API-based embedder. If all fail, the document is stored without
+embedding and marked for later retry. Ingestion of the rest continues.
 
-If embedding generation fails, the system attempts alternative embedding providers. The fallback chain is Gleann, Mistral, then DeepSeek. If all providers fail, the system returns an error message to the user.
+### 6.2 Search failures
 
-### 5.2 Search Failures[](#5-2-search-failures)
+If the index returns no candidates, the request goes to the LLM without
+retrieval (as if RAG were off), and the UI notes that no context was
+found.
 
-If the vector search returns no results, the system attempts a tag-based search. If tag-based search also returns no results, the system informs the user that no relevant documents were found.
+### 6.3 Provider failures
 
-### 5.3 Provider Failures[](#5-3-provider-failures)
+Unchanged from the current architecture: failures are surfaced to the
+user with the raw error message. There is no automatic provider failover.
 
-If the selected AI provider fails, the system attempts to switch to an alternative provider. The fallback chain is DeepSeek, Gemini, then Mistral. The system preserves the conversation context during provider switching.
+## 7. What this pipeline is not
 
-### 5.4 Timeout Handling[](#5-4-timeout-handling)
-
-The system implements configurable timeouts for all external calls. If a timeout occurs, the system retries the operation up to three times with exponential backoff. After three failures, the system returns an error message.
-
-## 6. Performance Considerations[](#6-performance-considerations)
-
-### 6.1 Caching[](#6-1-caching)
-
-The system implements caching at multiple levels. Query embeddings are cached to avoid redundant computation. Search results are cached for repeated queries. Response generation may be cached for identical queries.
-
-### 6.2 Parallel Processing[](#6-2-parallel-processing)
-
-The ingestion pipeline supports parallel processing of multiple documents. The system processes documents concurrently when resources allow. This reduces ingestion time for large document sets.
-
-### 6.3 Lazy Loading[](#6-3-lazy-loading)
-
-The system implements lazy loading for expensive resources. The embedding engine loads on first use. The HNSW index loads when a project is activated. This minimizes startup time and memory usage.
-
-### 6.4 Index Optimization[](#6-4-index-optimization)
-
-The system periodically optimizes the HNSW index. Optimization includes rebuilding the index with updated parameters and removing deleted documents. This maintains search quality over time.
-
-## 7. Monitoring and Logging[](#7-monitoring-and-logging)
-
-### 7.1 Query Logging[](#7-1-query-logging)
-
-The system logs all queries with their embeddings, search results, and response metadata. This provides an audit trail and enables analysis of search quality.
-
-### 7.2 Performance Metrics[](#7-2-performance-metrics)
-
-The system tracks pipeline performance metrics including embedding time, search time, and response generation time. These metrics are displayed in the statistics section.
-
-### 7.3 Error Logging[](#7-3-error-logging)
-
-The system logs all errors with contextual information including the operation, the input, and the error message. This facilitates debugging and system improvement.
+It is not a search engine, not a knowledge management platform, not a
+service. It has no query optimization layer, no learning-to-rank, no
+personalization, no multi-user semantics. Every document belongs to a
+project owned by one user (me), and retrieval respects that boundary.

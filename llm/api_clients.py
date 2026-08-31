@@ -1,6 +1,6 @@
 import json
 import requests
-from typing import List, Dict, Generator
+from typing import List, Dict, Generator, Optional
 
 # ========== CONSTANTES DE MODELOS ==========
 MAX_TOKENS_DEEPSEEK = 8192
@@ -48,22 +48,34 @@ def detect_reformulation(user_message: str) -> bool:
 def build_context_with_reformulation_awareness(
     messages: List[Dict],
     is_reformulation: bool,
-    reformulation_count: int
+    reformulation_count: int,
+    project_system_prompt: Optional[str] = None,
 ) -> List[Dict]:
-    """Construye el contexto estándar para la API inyectando un System Prompt."""
+    """Construye el contexto estándar para la API inyectando un System Prompt.
+
+    Si `project_system_prompt` viene definido (no None, no cadena vacía), REEMPLAZA
+    al default por completo, incluyendo la lógica de reformulación. Racional:
+    si un proyecto tiene un prompt del estilo "eres parte de un pipeline, solo
+    responde, no opines", inyectar el hint de reformulación va exactamente contra
+    esa intención. El proyecto tiene la palabra final.
+    """
     context = []
 
-    system_prompt = """Eres un asistente experto y útil.
+    if project_system_prompt:
+        # El proyecto tomó control: se respeta su prompt tal cual.
+        system_prompt = project_system_prompt
+    else:
+        system_prompt = """Eres un asistente experto y útil.
 Si el usuario pide una reformulación, prioriza la nueva versión de la pregunta.
 Responde de manera clara, concisa y precisa."""
 
-    if is_reformulation:
-        system_prompt += f"""
+        if is_reformulation:
+            system_prompt += f"""
 
-        ⚠️ El usuario está reformulando su pregunta (intento #{reformulation_count}).
-        Mantén la intención original pero mejora la respuesta anterior.
-        Aplica los cambios específicos que el usuario solicite.
-        """
+            ⚠️ El usuario está reformulando su pregunta (intento #{reformulation_count}).
+            Mantén la intención original pero mejora la respuesta anterior.
+            Aplica los cambios específicos que el usuario solicite.
+            """
 
     context.append({"role": "system", "content": system_prompt})
 
@@ -81,9 +93,16 @@ Responde de manera clara, concisa y precisa."""
 def stream_deepseek_completion(
     messages: List[Dict],
     api_key: str,
-    model: str = "deepseek-v4-pro",
+    model: str = "deepseek-reasoner", # "deepseek-chat"
+    reasoning_effort: Optional[str] = None,
 ) -> Generator[str, None, None]:
-    """Streaming para la API de DeepSeek."""
+    """Streaming para la API de DeepSeek.
+
+    `reasoning_effort` acepta valores en español ('bajo'/'medio'/'alto') que se
+    mapean al estándar de la API ('low'/'medium'/'high'). Solo aplica a modelos
+    con capacidad de razonamiento (deepseek-reasoner y similares); en modelos
+    chat regulares la API lo ignora sin fallar.
+    """
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -96,6 +115,10 @@ def stream_deepseek_completion(
         "max_tokens": MAX_TOKENS_DEEPSEEK,
         "stream": True
     }
+
+    if reasoning_effort:
+        _effort_map = {"bajo": "low", "medio": "medium", "alto": "high"}
+        payload["reasoning_effort"] = _effort_map.get(reasoning_effort, reasoning_effort)
 
     try:
         with requests.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, stream=True, timeout=30) as response:
