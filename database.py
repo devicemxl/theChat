@@ -504,6 +504,50 @@ class ChatDatabase:
 
             return messages
 
+    def get_messages_for_context(self, conversation_id: int) -> List[Dict]:
+        """Devuelve los mensajes completos para una conversación, incluyendo
+        la cadena de la madre si es una rama.
+
+        - Si la conversación no es hija: solo sus mensajes.
+        - Si es hija: mensajes de la madre hasta `fork_at_message_id` (inclusive)
+        seguidos de los mensajes propios.
+        """
+        conv = self.get_conversation(conversation_id)
+        if not conv:
+            return []
+
+        # Si no es rama, comportamiento idéntico a get_messages
+        if not conv.get("forked_from_conversation_id") or not conv.get("fork_at_message_id"):
+            return self.get_messages(conversation_id)
+
+        mother_id = conv["forked_from_conversation_id"]
+        fork_point = conv["fork_at_message_id"]
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Mensajes de la madre hasta el punto de fork
+            cursor.execute('''
+                SELECT * FROM messages
+                WHERE conversation_id = ? AND id <= ?
+                ORDER BY id ASC
+            ''', (mother_id, fork_point))
+            mother_messages = [dict(row) for row in cursor.fetchall()]
+
+            # Mensajes propios de la hija
+            cursor.execute('''
+                SELECT * FROM messages
+                WHERE conversation_id = ?
+                ORDER BY id ASC
+            ''', (conversation_id,))
+            own_messages = [dict(row) for row in cursor.fetchall()]
+
+        # Convertir truncated a bool (igual que get_messages)
+        for msg in mother_messages + own_messages:
+            msg["truncated"] = bool(msg["truncated"])
+        return mother_messages + own_messages
+    
     def delete_messages(self, conversation_id: int):
         """Elimina todos los mensajes de una conversación"""
         with sqlite3.connect(self.db_path) as conn:

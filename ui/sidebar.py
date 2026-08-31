@@ -92,9 +92,13 @@ def init_database():
 # ========== GESTIÓN DE CONVERSACIONES ==========
 
 def load_conversation_messages(conversation_id: int) -> List[Dict]:
-    """Carga los mensajes de una conversación desde la base de datos"""
+    """Carga los mensajes de una conversación desde la base de datos.
+
+    Si la conversación es una rama, incluye los mensajes de la madre
+    hasta el punto de fork seguidos de los propios.
+    """
     db = st.session_state.db
-    messages = db.get_messages(conversation_id)
+    messages = db.get_messages_for_context(conversation_id)
 
     formatted_messages = []
     for msg in messages:
