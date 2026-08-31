@@ -2,12 +2,12 @@
 store.py - Atomic SQLite + HNSW insertion helpers for theChat RAG.
 
 Adaptado para theChat:
-  * Table `rag_chunks` with a mandatory `project_id` column.
-  * Stores the text content of each chunk alongside its embedding and tags.
-  * Uses a separate SQLite database (`rag_chunks.db`) and HNSW index file.
-  * All cross-store operations are atomic at the row level.
+  * Tabla `rag_chunks` con columna obligatoria `project_id`.
+  * Guarda el contenido textual del chunk junto a su embedding y tags.
+  * Usa una base de datos SQLite separada (`rag_chunks.db`) y un archivo de índice HNSW.
+  * Todas las operaciones entre BD e índice son atómicas a nivel de fila.
 
-The original code was adapted from the standalone CogNeu RAG prototype.
+Código original adaptado del prototipo CogNeu RAG.
 Copyright (c) 2026 CogNeu / David Ochoa.
 """
 
@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunks_hash    ON rag_chunks(content_hash);
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create the `rag_chunks` table and indexes if missing."""
+    """Crea la tabla `rag_chunks` y sus índices si no existen."""
     conn.executescript(SCHEMA_SQL)
     conn.commit()
 
@@ -52,7 +52,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 def resize_if_needed(index, extra_slots: int = 1, growth_factor: int = 2) -> None:
-    """Ensure the HNSW index has capacity for `extra_slots` more items."""
+    """Asegura que el índice HNSW tenga capacidad para `extra_slots` elementos más."""
     needed = index.element_count + extra_slots
     if needed <= index.max_elements:
         return
@@ -76,25 +76,24 @@ def insert_atomic(
     content_hash: str | None = None,
 ) -> int:
     """
-    Insert a single chunk (embedding, link, text, tags, project_id) into
-    SQLite `rag_chunks` and the HNSW index as one logical unit.
+    Inserta un chunk (embedding, link, texto, tags, project_id) en SQLite
+    `rag_chunks` y en el índice HNSW como una sola unidad lógica.
 
-    Sequence:
-      1. BEGIN SQLite transaction.
-      2. INSERT row -> obtain rowid.
-      3. Ensure HNSW capacity, then add_items([vec], [rowid]).
-      4. COMMIT SQLite. Both writes are visible.
+    Secuencia:
+      1. BEGIN de SQLite.
+      2. INSERT de la fila -> obtener rowid.
+      3. Asegurar capacidad del HNSW y add_items([vec], [rowid]).
+      4. COMMIT de SQLite. Ambos writes son visibles.
 
-    Failure modes:
-      - INSERT fails                    -> rollback, no HNSW change. Raise.
-      - add_items fails                 -> rollback SQLite. HNSW untouched
-                                           (single-item add_items is atomic
-                                           in hnswlib). Raise.
-      - COMMIT fails (disk full, etc.)  -> rollback SQLite; HNSW already
-                                           has the row. Best-effort
-                                           mark_deleted to clean up. Raise.
+    Modos de fallo:
+      - Si INSERT falla              -> rollback, sin cambios en HNSW. Raise.
+      - Si add_items falla           -> rollback SQLite. HNSW queda intacto
+                                        (add_items de un solo item es atómico
+                                        en hnswlib). Raise.
+      - Si COMMIT falla              -> rollback SQLite; HNSW ya tiene la fila.
+                                        Se intenta mark_deleted. Raise.
 
-    Returns the new SQLite rowid on success.
+    Devuelve el nuevo rowid SQLite si todo sale bien.
     """
     if vec.shape != (dim,):
         raise ValueError(f"vec shape {vec.shape} != expected ({dim},)")
@@ -123,17 +122,17 @@ def insert_atomic(
         conn.execute("COMMIT")
         return rowid
     except Exception:
-        # SQLite rollback first (cheap, always safe).
+        # Primero rollback SQLite (barato y siempre seguro).
         try:
             conn.execute("ROLLBACK")
         except Exception:
             pass
-        # If HNSW got the row but the transaction did not commit, remove it.
+        # Si HNSW recibió la fila pero la transacción no commitó, limpiarlo.
         if added_to_index and rowid is not None:
             try:
                 index.mark_deleted(rowid)
             except Exception:
-                pass  # Already inconsistent; verify_consistency will surface it.
+                pass  # Inconsistencia detectable por verify_consistency.
         raise
 
 
@@ -148,10 +147,10 @@ def link_or_hash_exists(
     project_id: int | None = None,
 ) -> bool:
     """
-    Return True if a row with the same text_link or content_hash already
-    exists. Optionally restrict the check to a specific project_id.
+    Devuelve True si ya existe una fila con el mismo text_link o content_hash.
+    Opcionalmente restringe la verificación a un proyecto concreto.
 
-    Callers use this to skip re-embedding unchanged content.
+    Se usa para evitar re-embeber contenido que no ha cambiado.
     """
     if project_id is not None:
         if content_hash is not None:
@@ -188,9 +187,9 @@ def link_or_hash_exists(
 
 def verify_consistency(conn: sqlite3.Connection, index) -> tuple[int, int, bool]:
     """
-    Compare SQLite row count and HNSW element count.
-    Returns (db_count, index_count, ok). Callers decide how to react
-    (warn, rebuild index from BD, abort).
+    Compara el número de filas en SQLite y elementos en HNSW.
+    Devuelve (db_count, index_count, ok). El llamador decide cómo reaccionar
+    (avisar, reconstruir índice desde BD, abortar).
     """
     row = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()
     db_count  = int(row[0])
@@ -208,8 +207,8 @@ def checkpoint(
     extra: dict | None = None,
 ) -> None:
     """
-    Persist the HNSW index and its meta.json together.
-    Meta is written after the index to bias against half-writes.
+    Persiste el índice HNSW y su meta.json juntos.
+    El meta se escribe después del índice para reducir el riesgo de escrituras a medias.
     """
     Path(index_path).parent.mkdir(parents=True, exist_ok=True)
     index.save_index(index_path)
@@ -230,13 +229,13 @@ def checkpoint(
 
 
 # ---------------------------------------------------------------------------
-# Blob helpers (for readers rebuilding the index from BD)
+# Blob helpers (para lectores que reconstruyen el índice desde BD)
 # ---------------------------------------------------------------------------
 
 def unpack_blob(blob: bytes, dim: int) -> np.ndarray:
-    """Decode a stored embedding BLOB back into a float32 numpy array."""
+    """Decodifica un BLOB de embedding guardado a un array numpy float32."""
     if isinstance(blob, str):
-        # Legacy: earlier scripts stored JSON strings instead of BLOBs.
+        # Legacy: scripts anteriores guardaban strings JSON en lugar de BLOBs.
         return np.array(json.loads(blob), dtype=np.float32)
     return np.frombuffer(blob, dtype=np.float32, count=dim).copy()
 
@@ -244,6 +243,6 @@ def unpack_blob(blob: bytes, dim: int) -> np.ndarray:
 def iter_all_embeddings(
     conn: sqlite3.Connection, dim: int
 ) -> Iterable[tuple[int, np.ndarray]]:
-    """Yield (rowid, vec) for every row in rag_chunks."""
+    """Yield (rowid, vec) por cada fila de rag_chunks."""
     for rowid, blob in conn.execute("SELECT id, embedding FROM rag_chunks"):
         yield rowid, unpack_blob(blob, dim)
