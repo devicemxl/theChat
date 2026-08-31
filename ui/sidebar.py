@@ -232,40 +232,71 @@ def _dialog_delete_conv(conv: Dict):
             st.rerun()
 
 
-def _render_conversation_row(conv: Dict):
-    """Renderiza una conversación como fila compacta con botones inline.
+def _render_conversation_row(conv: Dict, is_branch: bool = False, mother_title: str = ""):
+    """Renderiza una conversación como fila compacta con título, id y acciones.
 
-    La conversación actual se marca con ▶️ y estilo primario.
+    Las ramas se muestran sangradas con prefijo 🌿. Si tienen mensajes propios
+    se muestra el título real; si no, aparece 'Rama #id'.
     """
     is_current = conv["id"] == st.session_state.current_conversation_id
-    icon = "▶️" if is_current else "📄"
-    label = f"{icon} {conv['title']}"
+    conv_id = conv["id"]
+    title = conv["title"]
+    extra = " (sin msgs)" if is_branch and conv.get("msg_count", 0) == 0 else ""
 
-    col_title, col_edit, col_del = st.columns([6, 1, 1])
-    with col_title:
+    if is_branch:
+        icon = "🌿"
+        if mother_title and title == mother_title:
+            label = f"{icon} Rama #{conv_id}{extra}"
+        else:
+            label = f"{icon} {title} #{conv_id}{extra}"
+    else:
+        icon = "▶️" if is_current else "📄"
+        label = f"{icon} {title} #{conv_id}"
+
+    # Layout: para ramas añadimos una columna de indentación
+    if is_branch:
+        cols = st.columns([0.7, 3.3, 1, 1, 1])
+        indent_col, title_col, id_col, edit_col, del_col = cols
+        with indent_col:
+            st.write("")  # sangría visual
+    else:
+        cols = st.columns([4, 1, 1, 1])
+        title_col, id_col, edit_col, del_col = cols
+
+    with title_col:
         if st.button(
             label,
-            key=f"load_{conv['id']}",
+            key=f"load_{conv_id}",
             use_container_width=True,
             type="primary" if is_current else "secondary",
         ):
             if not is_current:
-                switch_conversation(conv["id"])
+                switch_conversation(conv_id)
                 st.rerun()
-    with col_edit:
-        if st.button("✏️", key=f"edit_{conv['id']}", help="Renombrar"):
+    with id_col:
+        st.caption(f"#{conv_id}")
+    with edit_col:
+        if st.button("✏️", key=f"edit_{conv_id}", help="Renombrar"):
             _dialog_rename_conv(conv)
-    with col_del:
-        if st.button("🗑️", key=f"del_{conv['id']}", help="Eliminar"):
+    with del_col:
+        if st.button("🗑️", key=f"del_{conv_id}", help="Eliminar"):
             _dialog_delete_conv(conv)
 
+def _render_conversation_entry(entry: Dict):
+    """Renderiza una conversación madre y sus ramas debajo de ella."""
+    mother = entry["conversation"]
+    mother_title = mother["title"]
+    _render_conversation_row(mother, is_branch=False)
+
+    for branch in entry.get("branches", []):
+        _render_conversation_row(branch, is_branch=True, mother_title=mother_title)
 
 def view_conversation_history():
-    """Renderiza el historial agrupado por proyecto.
+    """Renderiza el historial agrupado por proyecto, con ramas bajo su madre.
 
     Cada proyecto se muestra como un expander; la sección 'Sin proyecto'
     va siempre al final. Se auto-expande el grupo que contiene la
-    conversación activa para que el usuario vea dónde está parado.
+    conversación activa (ya sea madre o rama).
     """
     db = st.session_state.db
     groups = db.get_conversations_grouped()
@@ -273,23 +304,29 @@ def view_conversation_history():
 
     for group in groups:
         project = group["project"]
-        convs = group["conversations"]
+        entries = group["conversations"]
 
         if project:
-            label = f"{project['icon']} {project['name']} ({len(convs)})"
+            label = f"{project['icon']} {project['name']} ({len(entries)})"
         else:
-            label = f"📄 Sin proyecto ({len(convs)})"
+            label = f"📄 Sin proyecto ({len(entries)})"
 
-        # Auto-expandir el grupo que contiene la conversación actual.
-        contains_current = any(c["id"] == current_id for c in convs)
+        # Auto-expandir si el grupo contiene la conversación actual
+        contains_current = False
+        for entry in entries:
+            if entry["conversation"]["id"] == current_id:
+                contains_current = True
+                break
+            if any(b["id"] == current_id for b in entry.get("branches", [])):
+                contains_current = True
+                break
 
         with st.expander(label, expanded=contains_current):
-            if not convs:
+            if not entries:
                 st.caption("_Sin conversaciones_")
                 continue
-            for conv in convs:
-                _render_conversation_row(conv)
-
+            for entry in entries:
+                _render_conversation_entry(entry)
 
 def render_sidebar():
     """Renderiza toda la barra lateral visualmente"""

@@ -417,41 +417,70 @@ class ChatDatabase:
             return dict(row) if row else None
 
     def get_conversations_grouped(self) -> List[Dict]:
-        """Devuelve las conversaciones agrupadas por proyecto, listas para renderizar.
+        """Devuelve conversaciones agrupadas por proyecto, con ramas bajo su madre.
 
         Estructura:
             [
-                {'project': {id, name, icon, color, ...}, 'conversations': [...]},
+                {
+                    'project': {...},
+                    'conversations': [
+                        {'conversation': {...}, 'branches': [{...}, ...]},
+                        ...
+                    ]
+                },
                 ...
-                {'project': None, 'conversations': [...]}  # 'Sin proyecto', al final
+                {'project': None, 'conversations': [...]}
             ]
-
-        Los proyectos van ordenados alfabéticamente; 'Sin proyecto' siempre al final.
-        Dentro de cada grupo, las conversaciones van por updated_at DESC.
         """
         projects = self.get_projects()
         all_convs = self.get_conversations()
 
-        # Indexar conversaciones por project_id
-        by_project: Dict[Optional[int], List[Dict]] = {}
+        # Separar madres y ramas
+        branches_by_parent: Dict[int, List[Dict]] = {}
+        mothers: List[Dict] = []
         for conv in all_convs:
-            pid = conv.get('project_id')  # None si no asignada
-            by_project.setdefault(pid, []).append(conv)
+            parent_id = conv.get('forked_from_conversation_id')
+            if parent_id:
+                branches_by_parent.setdefault(parent_id, []).append(conv)
+            else:
+                mothers.append(conv)
 
+        mothers_by_id = {m['id']: m for m in mothers}
+
+        # Agrupar por proyecto
+        by_project: Dict[Optional[int], List[Dict]] = {}
+        for mother in mothers:
+            entry = {
+                'conversation': mother,
+                'branches': branches_by_parent.get(mother['id'], []),
+            }
+            pid = mother.get('project_id')
+            by_project.setdefault(pid, []).append(entry)
+
+        # Ramas huérfanas (su madre fue borrada) se muestran como conversaciones normales
+        orphan_branches = [
+            branch for parent_id, branch_list in branches_by_parent.items()
+            if parent_id not in mothers_by_id
+            for branch in branch_list
+        ]
+        for branch in orphan_branches:
+            pid = branch.get('project_id')
+            by_project.setdefault(pid, []).append({
+                'conversation': branch,
+                'branches': [],
+            })
+
+        # Construir resultado final
         result = []
         for project in projects:
             result.append({
                 'project': project,
-                'conversations': by_project.get(project['id'], [])
+                'conversations': by_project.get(project['id'], []),
             })
-
-        # Grupo 'Sin proyecto' — siempre al final, incluso si está vacío
-        # (útil para mostrar la cabecera y que se vea "hay una sección aquí").
         result.append({
             'project': None,
-            'conversations': by_project.get(None, [])
+            'conversations': by_project.get(None, []),
         })
-
         return result
 
     # ========== MENSAJES ==========

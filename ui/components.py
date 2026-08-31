@@ -119,7 +119,13 @@ def load_custom_css():
     st.markdown(
         """
         <style>
-        [data-testid="stSidebar"] { max-width: 300px; }
+        .stExpanderDetails,
+        .stLayoutWrapper,
+        .stExpander{
+        padding:0;
+        margin:0;
+        }
+        [data-testid="stSidebar"] { max-width: 450px; }
         [data-testid="stMainMenu"] { display: none; }
         body{ line-height: 1; text-size-adjust: 80%; }
         .st-emotion-cache-liupih {
