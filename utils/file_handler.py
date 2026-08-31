@@ -1,59 +1,50 @@
 import io
+from pathlib import Path
 from typing import List, Dict, Tuple
 
-def extract_text_from_file(uploaded_file) -> str:
-    """
-    Extrae el texto de un archivo subido según su extensión.
-    Soporta: .txt, .md, .pdf, .docx, .csv, .json, .py, .js, .html, .css, .xml, .sql
-    """
-    # Si no tiene extensión, intentamos leer como texto
-    if '.' not in uploaded_file.name:
-        try:
-            return uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        except:
-            return "[Contenido binario no legible]"
 
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    content = ""
+# Extensiones que requieren un extractor especial (binario o formato estructurado).
+# Todo lo demás se intenta leer como texto UTF-8.
+SPECIAL_EXTRACTION = {
+    ".pdf": "pdf",
+    ".docx": "docx",
+    ".csv": "csv",
+}
+
+
+def extract_text_from_bytes(data: bytes, filename: str) -> str:
+    """Extrae texto de un archivo a partir de sus bytes.
+
+    Es la función central de extracción de texto. Tanto los adjuntos del chat
+    como la ingesta RAG pasan por aquí; nunca debe haber dos implementaciones.
+    """
+    ext = Path(filename).suffix.lower()
 
     try:
-        if file_extension in ["txt", "md"]:
-            content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        elif file_extension == "pdf":
-            try:
-                from pypdf import PdfReader
-                reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
-                for page in reader.pages:
-                    content += page.extract_text() + "\n"
-            except ImportError:
-                content = "[Error: pypdf no está instalado. Instálalo con 'pip install pypdf']"
-        elif file_extension == "docx":
-            try:
-                from docx import Document
-                doc = Document(io.BytesIO(uploaded_file.getvalue()))
-                for para in doc.paragraphs:
-                    content += para.text + "\n"
-            except ImportError:
-                content = "[Error: python-docx no está instalado. Instálalo con 'pip install python-docx']"
-        elif file_extension == "csv":
-            try:
-                import pandas as pd
-                df = pd.read_csv(io.BytesIO(uploaded_file.getvalue()))
-                content = df.to_string()
-            except ImportError:
-                content = "[Error: pandas no está instalado. Instálalo con 'pip install pandas']"
-        elif file_extension in ["json", "py", "js", "html", "css", "xml", "sql"]:
-            content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        else:
-            # Intento genérico como texto para extensiones desconocidas
-            try:
-                content = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-            except:
-                content = "[Contenido binario no legible]"
-    except Exception as e:
-        content = f"[Error al leer el archivo: {str(e)}]"
+        if ext == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(data))
+            return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
 
-    return content.strip()
+        if ext == ".docx":
+            from docx import Document
+            doc = Document(io.BytesIO(data))
+            return "\n".join(p.text for p in doc.paragraphs).strip()
+
+        if ext == ".csv":
+            import pandas as pd
+            df = pd.read_csv(io.BytesIO(data))
+            return df.to_string()
+
+        # Texto plano: intento genérico con UTF-8.
+        return data.decode("utf-8", errors="ignore").strip()
+    except Exception as e:
+        return f"[Error al extraer texto: {e}]"
+
+
+def extract_text_from_file(uploaded_file) -> str:
+    """Extrae texto de un UploadedFile de Streamlit (wrapper de bytes)."""
+    return extract_text_from_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
 
 def extract_files_from_message(content: str) -> Tuple[str, List[Dict]]:

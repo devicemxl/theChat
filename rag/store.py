@@ -19,6 +19,7 @@ from typing import Iterable
 
 import numpy as np
 
+import hnswlib
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -246,3 +247,46 @@ def iter_all_embeddings(
     """Yield (rowid, vec) por cada fila de rag_chunks."""
     for rowid, blob in conn.execute("SELECT id, embedding FROM rag_chunks"):
         yield rowid, unpack_blob(blob, dim)
+        
+def rebuild_index_from_db(
+    conn: sqlite3.Connection,
+    dim: int,
+    index_path: str,
+    meta_path: str,
+    db_path: str,
+    ef_construction: int = 200,
+    M: int = 16,
+    ef: int = 50,
+):
+    """Reconstruye el índice HNSW completo desde los embeddings de `rag_chunks`.
+
+    Usado cuando el bin no existe o está corrupto pero la BD sigue teniendo
+    los vectores originales. Así no se pierde el trabajo ya ingestado.
+    """
+    rows = conn.execute("SELECT id, embedding FROM rag_chunks ORDER BY id").fetchall()
+    for rowid, blob in rows:
+        vec = unpack_blob(blob, dim)
+        if vec.shape != (dim,):
+            # Fila con embedding malformado — la saltamos y seguimos.
+            continue
+
+    count = len(rows)
+    index = hnswlib.Index(space="cosine", dim=dim)
+    index.init_index(
+        max_elements=max(10_000, count * 2),
+        ef_construction=ef_construction,
+        M=M,
+    )
+    index.set_ef(ef)
+
+    if count == 0:
+        print("[RAG] No hay chunks en BD. Índice vacío creado.")
+    else:
+        ids = [rid for rid, _ in rows]
+        vecs = [unpack_blob(blob, dim) for _, blob in rows]
+        index.add_items(np.array(vecs, dtype=np.float32), ids)
+        print(f"[RAG] Índice reconstruido con {count} chunks desde la BD.")
+
+    # Persistir de inmediato para no volver a perder el bin.
+    checkpoint(index, index_path, meta_path, dim, db_path)
+    return index

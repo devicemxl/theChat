@@ -19,6 +19,9 @@ import streamlit as st
 from database import ChatDatabase
 from ui.components import load_custom_css  # noqa: F401  (CSS ya cargado en app.py)
 
+import traceback
+
+
 # ---------------------------------------------------------------------------
 # Inicialización defensiva: no romper si se entra directo a esta página.
 # ---------------------------------------------------------------------------
@@ -45,29 +48,47 @@ except ImportError as e:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def check_rag_prerequisites() -> list[str]:
-    """Verifica que las DLLs y el modelo estén en las rutas configuradas."""
+def check_rag_prerequisites() -> tuple[list[str], list[str]]:
+    """Devuelve (errores_criticos, warnings).
+
+    Crítico = sin esto no se puede embedir ni ingestar.
+    Warning = falta algo que se regenera solo (ej. índice HNSW).
+    """
     if not RAG_AVAILABLE:
-        return [f"No se pudieron importar los módulos RAG: {RAG_IMPORT_ERROR}"]
+        # No se puede ni importar el paquete → todo es crítico.
+        return [f"No se pudieron importar los módulos RAG: {RAG_IMPORT_ERROR}"], []
 
-    problemas = []
     if not rag_config:
-        problemas.append("No se pudo cargar rag/config.py")
-        return problemas
+        return ["No se pudo cargar rag/config.py"], []
 
-    paths = {
+    errores: list[str] = []
+    warnings: list[str] = []
+
+    # Rutas indispensables para EMBEDIR (sin esto no hay ingesta).
+    criticas = {
         "Modelo EmbeddingGemma": rag_config.RAG_MODEL_DIR,
         "Tokenizer SentencePiece": rag_config.RAG_SP_MODEL,
         "DLL del motor (gleann_engine.dll)": rag_config.RAG_ENGINE_LIB,
         "DLL del tokenizer (sp_wrap.dll)": rag_config.RAG_SP_LIB,
         "Pack JSON": rag_config.RAG_PACK_JSON,
     }
-
-    for nombre, path in paths.items():
+    for nombre, path in criticas.items():
         if not path.exists():
-            problemas.append(f"{nombre} no encontrado: {path}")
-    return problemas
+            errores.append(f"{nombre} no encontrado: {path}")
 
+    # Rutas regenerables (el índice se reconstruye solo).
+    regenerables = {
+        "Índice HNSW bin": rag_config.RAG_INDEX_PATH,
+        "Índice HNSW meta": rag_config.RAG_INDEX_META_PATH,
+    }
+    for nombre, path in regenerables.items():
+        if not path.exists():
+            warnings.append(
+                f"{nombre} no encontrado: {path}. "
+                "Se reconstruirá automáticamente desde la BD durante la ingesta."
+            )
+
+    return errores, warnings
 
 def ingest_uploaded_files(uploaded_files, project_id: int) -> dict:
     """Ejecuta la ingesta con barra de progreso."""
@@ -111,16 +132,19 @@ st.caption(
 )
 
 # 1. Verificar disponibilidad del motor
-problemas = check_rag_prerequisites()
-if problemas:
+errores, warnings = check_rag_prerequisites()
+if errores:
     st.error("**El motor RAG no está disponible.** Revisa la configuración.")
-    for p in problemas:
-        st.warning(f"- {p}")
+    for e in errores:
+        st.warning(f"- {e}")
     st.info(
-        "Asegúrate de haber completado la Fase 0 y de que las rutas en "
-        "`rag/config.py` apunten a los archivos correctos."
+        "Asegúrate de que las rutas en `rag/config.py` apunten a los "
+        "archivos correctos."
     )
     st.stop()
+
+for w in warnings:
+    st.warning(w)
 
 # 2. Cargar proyectos
 proyectos = db.get_projects()
@@ -164,5 +188,7 @@ if uploaded_files:
             )
         except Exception as e:
             st.error(f"❌ Error durante la ingesta: {e}")
+            with st.expander("🔍 Traceback completo"):
+                st.code(traceback.format_exc(), language="text")
 else:
     st.info("Sube al menos un documento para comenzar.")

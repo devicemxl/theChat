@@ -43,6 +43,8 @@ import hnswlib
 import numpy as np
 import requests
 
+from utils.file_handler import extract_text_from_bytes
+
 import rag.config as cfg
 from rag.engine import GleannEngine
 from rag.store import (
@@ -50,8 +52,8 @@ from rag.store import (
     insert_atomic,
     checkpoint,
     verify_consistency,
+    rebuild_index_from_db,  # nueva
 )
-
 
 # ---------------------------------------------------------------------------
 # Cliente DeepSeek
@@ -63,7 +65,6 @@ DEEPSEEK_MODEL   = "deepseek-chat"
 DEEPSEEK_REQUEST_TIMEOUT = (10, 120)  # (connect, read) seconds
 DEEPSEEK_MAX_RETRIES     = 3
 DEEPSEEK_BACKOFF_BASE    = 2.0        # seconds; exp * jitter
-
 
 def _get_deepseek_key() -> str:
     """Obtiene la API key de DeepSeek desde st.secrets o variable de entorno.
@@ -186,38 +187,7 @@ def content_hash(text: str) -> str:
 # Extracción de texto desde bytes
 # ---------------------------------------------------------------------------
 
-def _extract_text_from_bytes(data: bytes, filename: str) -> str:
-    """Extrae texto de un archivo subido, según su extensión.
-
-    Soporta texto plano, markdown, PDF, DOCX, CSV, JSON y código.
-    Se adapta de `utils/file_handler.py` de theChat.
-    """
-    ext = Path(filename).suffix.lower()
-    try:
-        if ext in (".txt", ".md", ".markdown", ".rst", ".py", ".js",
-                   ".ts", ".go", ".c", ".h", ".cpp", ".hpp", ".java",
-                   ".json", ".yml", ".yaml", ".toml", ".xml", ".html",
-                   ".css", ".sql"):
-            return data.decode("utf-8", errors="ignore")
-        elif ext == ".pdf":
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(data))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-        elif ext == ".docx":
-            from docx import Document
-            doc = Document(io.BytesIO(data))
-            return "\n".join(p.text for p in doc.paragraphs)
-        elif ext == ".csv":
-            import pandas as pd
-            df = pd.read_csv(io.BytesIO(data))
-            return df.to_string()
-        else:
-            # Intento genérico para extensiones desconocidas.
-            return data.decode("utf-8", errors="ignore")
-    except Exception as e:
-        # Si falla la extracción específica, devolver texto de error.
-        return f"[Error al extraer texto: {e}]"
-
+# ELIMINADA
 
 # ---------------------------------------------------------------------------
 # Prompts de DeepSeek
@@ -292,25 +262,56 @@ def summarize_document(page_summaries: List[str]) -> dict:
 # Carga / creación del índice HNSW
 # ---------------------------------------------------------------------------
 
-def _load_or_create_index(dim: int):
-    """Carga el índice HNSW existente o crea uno nuevo."""
+def _load_or_create_index(dim: int, conn: Optional[sqlite3.Connection] = None):
+    """Carga el índice HNSW existente, lo reconstruye si falta/corrompe,
+    o crea uno vacío si no hay datos.
+
+    Nunca lanza por un bin ausente: el peor caso es índice vacío que se
+    completará con la ingesta actual y el checkpoint final.
+    """
     index_path = str(cfg.RAG_INDEX_PATH)
     meta_path  = str(cfg.RAG_INDEX_META_PATH)
 
-    try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        idx = hnswlib.Index(space="cosine", dim=meta["dim"])
-        idx.load_index(index_path)
-        idx.set_ef(meta.get("ef", 50))
-        print(f"[RAG] Índice HNSW cargado: {idx.element_count} elementos")
-    except FileNotFoundError:
-        idx = hnswlib.Index(space="cosine", dim=dim)
-        idx.init_index(max_elements=10_000, ef_construction=200, M=16)
-        idx.set_ef(50)
-        print("[RAG] Índice HNSW creado (capacidad inicial 10000)")
-    return idx
+    # 1) Ambos archivos existen → intentar carga normal.
+    if Path(index_path).exists() and Path(meta_path).exists():
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            if meta.get("dim") != dim:
+                raise ValueError(f"dim mismatch: meta={meta.get('dim')}, motor={dim}")
+            idx = hnswlib.Index(space="cosine", dim=dim)
+            idx.load_index(index_path)
+            idx.set_ef(meta.get("ef", 50))
+            print(f"[RAG] Índice HNSW cargado: {idx.element_count} elementos")
+            return idx
+        except (RuntimeError, OSError, json.JSONDecodeError, ValueError) as e:
+            print(f"[RAG] Índice corrupto o incompatible ({e}). Reconstruyendo...")
+    else:
+        print("[RAG] No hay índice HNSW previo.")
 
+    # 2) Hay conexión a BD y existe data → reconstruir desde BD.
+    if conn is not None:
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()
+            count = row[0] if row else 0
+            if count > 0:
+                print(f"[RAG] Reconstruyendo índice desde {count} chunks...")
+                return rebuild_index_from_db(
+                    conn,
+                    dim,
+                    index_path,
+                    meta_path,
+                    str(cfg.RAG_DB_PATH),
+                )
+        except sqlite3.Error as e:
+            print(f"[RAG] No se pudo leer la BD para reconstruir: {e}")
+
+    # 3) Sin datos → crear vacío.
+    print("[RAG] Creando índice vacío (capacidad 10000).")
+    idx = hnswlib.Index(space="cosine", dim=dim)
+    idx.init_index(max_elements=10_000, ef_construction=200, M=16)
+    idx.set_ef(50)
+    return idx
 
 # ---------------------------------------------------------------------------
 # Función principal de ingesta
@@ -348,10 +349,11 @@ def ingest_documents(
 
     cfg.ensure_dirs()
 
-    # Inicializar motor e índice
     engine = None
     conn = None
     try:
+        if progress_callback:
+            progress_callback(0, len(files), "Inicializando motor de embeddings...")
         engine = GleannEngine(
             engine_lib=str(cfg.RAG_ENGINE_LIB),
             sp_lib=str(cfg.RAG_SP_LIB),
@@ -362,10 +364,15 @@ def ingest_documents(
         )
         dim = engine.target_dim
 
+        # Con esto, si falla la inicialización, la última línea visible en la UI te dirá exactamente el paso que falló.
+        if progress_callback:
+            progress_callback(0, len(files), "Abriendo base de datos de chunks...")
         conn = sqlite3.connect(str(cfg.RAG_DB_PATH))
         ensure_schema(conn)
 
-        index = _load_or_create_index(dim)
+        if progress_callback:
+            progress_callback(0, len(files), "Cargando índice HNSW...")
+        index = _load_or_create_index(dim, conn=conn)
 
         # Verificación de consistencia al inicio
         db_n, idx_n, ok = verify_consistency(conn, index)
@@ -385,7 +392,9 @@ def ingest_documents(
             print(f"\n[RAG] Documento {file_idx}/{len(files)}: {filename}")
 
             # 1. Extraer texto
-            raw_text = _extract_text_from_bytes(data, filename)
+            #raw_text = _extract_text_from_bytes(data, filename)
+            raw_text = extract_text_from_bytes(data, filename)
+
             if not raw_text.strip() or raw_text.startswith("[Error"):
                 print("  [RAG] Sin texto válido, se omite.")
                 stats["skipped"] += 1
