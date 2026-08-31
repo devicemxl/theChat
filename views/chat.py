@@ -19,7 +19,14 @@ from llm.api_clients import (
 
 # --- Funciones auxiliares (colocar al inicio, después de imports) ---
 
-
+def render_user_message(msg: dict):
+    """Renderiza un mensaje de usuario con sus archivos adjuntos (si los hay)."""
+    display_content = msg.get("display_content", msg["content"])
+    st.markdown(display_content)
+    for file_info in msg.get("files", []):
+        with st.expander(f"📄 {file_info.get('name', 'archivo')}"):
+            st.code(file_info.get("content", ""), language="text")
+            
 def main():
 
     if "agent_mode" not in st.session_state:
@@ -46,18 +53,8 @@ def main():
     # 4. Dibujar Historial de Mensajes
     for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
-            if msg["role"] == "user" and "--- Contenido de '" in msg["content"]:
-                # Separar prompt de archivos
-                parts = msg["content"].split("--- Contenido de '")
-                prompt_part = parts[0].strip()
-                st.markdown(prompt_part)
-
-                for part in parts[1:]:
-                    if "' ---" in part:
-                        filename = part.split("' ---")[0]
-                        content: Any | Literal[''] = part.split("' ---")[1].strip() if "' ---" in part else ""
-                        with st.expander(f"📄 {filename}"):
-                            st.code(content, language="text")
+            if msg["role"] == "user":
+                render_user_message(msg)
             else:
                 st.markdown(msg["content"])
 
@@ -96,7 +93,7 @@ def main():
                     file_metadata.append({
                         "name": file.name,
                         "size": file.size,
-                        "content_preview": text[:200] + "..." if len(text) > 200 else text
+                        "content": text,
                     })
 
             final_prompt = f"Contenido de archivos adjuntos:\n{file_content}" if not prompt else f"{prompt}\n\n{file_content}"
@@ -119,7 +116,11 @@ def main():
             st.session_state.partial_response = ""
 
         # Guardar mensaje de usuario
-        st.session_state.messages.append({"role": "user", "content": final_prompt})
+        user_msg = {"role": "user", "content": final_prompt}
+        if file_metadata:
+            user_msg["display_content"] = original_prompt
+            user_msg["files"] = file_metadata
+        st.session_state.messages.append(user_msg)
         st.session_state.last_user_message = original_prompt
         st.session_state.db.save_message(st.session_state.current_conversation_id, {"role": "user", "content": final_prompt})
 
@@ -138,12 +139,9 @@ def main():
                     )
 
         # Mostrar mensaje de usuario
+        # Mostrar mensaje de usuario
         with st.chat_message("user"):
-            st.markdown(original_prompt)
-            if uploaded_files:
-                for file_info in file_metadata:
-                    with st.expander(f"📄 {file_info['name']} ({file_info['size']} bytes)"):
-                        st.code(file_info['content_preview'], language="text")
+            render_user_message(user_msg)
 
         # Procesar Respuesta del Asistente
         with st.chat_message("assistant"):
