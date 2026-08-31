@@ -227,6 +227,19 @@ def render_toolbar():
                     f"{active_project['name']}** activo — reemplaza al default "
                     "y omite la lógica de reformulación."
                 )
+                
+        # --- Toggle RAG ---
+        if st.session_state.get("rag_available", False):
+            active_project = st.session_state.db.get_conversation_project(
+                st.session_state.current_conversation_id
+            )
+            default_rag = st.session_state.get("rag_enabled", False)
+            st.checkbox(
+                "📚 Activar RAG (contexto de documentos)",
+                value=default_rag,
+                key="rag_enabled",
+                help="Busca y añade información de los documentos del proyecto a la respuesta.",
+            )
 
         st.info(msgX)
 

@@ -74,7 +74,20 @@ def init_database():
 
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
+        
+    # --- Variables RAG ---
+    if "rag_enabled" not in st.session_state:
+        st.session_state.rag_enabled = False
 
+    if "rag_retriever" not in st.session_state:
+        try:
+            from rag.retriever import RAGRetriever
+            st.session_state.rag_retriever = RAGRetriever()
+            st.session_state.rag_available = True
+        except Exception as e:
+            print(f"[RAG] Retriever no disponible: {e}")
+            st.session_state.rag_retriever = None
+            st.session_state.rag_available = False
 
 # ========== GESTIÓN DE CONVERSACIONES ==========
 

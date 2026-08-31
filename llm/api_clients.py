@@ -50,6 +50,7 @@ def build_context_with_reformulation_awareness(
     is_reformulation: bool,
     reformulation_count: int,
     project_system_prompt: Optional[str] = None,
+    rag_context: Optional[str] = None,   # <--- NUEVO
 ) -> List[Dict]:
     """Construye el contexto estándar para la API inyectando un System Prompt.
 
@@ -77,6 +78,17 @@ Responde de manera clara, concisa y precisa."""
             Aplica los cambios específicos que el usuario solicite.
             """
 
+    # --- Inyección de contexto RAG ---
+    if rag_context:
+        system_prompt += f"""
+
+        Contexto recuperado de documentos del proyecto:
+        {rag_context}
+
+        Usa este contexto como referencia prioritaria.
+        Si el contexto es insuficiente, dilo explícitamente.
+        """
+
     context.append({"role": "system", "content": system_prompt})
 
     for msg in messages:
@@ -86,7 +98,6 @@ Responde de manera clara, concisa y precisa."""
         })
 
     return context
-
 
 # ========== FUNCIONES DE STREAMING DE APIS ==========
 

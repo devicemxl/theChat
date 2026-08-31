@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import hnswlib
-import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -67,7 +66,8 @@ class RAGRetriever:
         self.index.set_ef(meta.get("ef", 50))
 
         # 3. Conectar a la BD de chunks
-        self.conn = sqlite3.connect(str(cfg.RAG_DB_PATH))
+        #self.conn = sqlite3.connect(str(cfg.RAG_DB_PATH))
+        #En search(), abrir conexión al inicio y cerrarla al final
 
     # ------------------------------------------------------------------
     # Búsqueda
@@ -109,19 +109,23 @@ class RAGRetriever:
         }
 
         # 3. Recuperar filas candidatas desde SQLite
-        placeholders = ",".join("?" for _ in candidate_ids)
-        sql = (
-            "SELECT id, project_id, text_link, text, tags "
-            "FROM rag_chunks "
-            f"WHERE id IN ({placeholders})"
-        )
-        params: List = candidate_ids
+        conn = sqlite3.connect(str(cfg.RAG_DB_PATH))
+        try:
+            placeholders = ",".join("?" for _ in candidate_ids)
+            sql = (
+                "SELECT id, project_id, text_link, text, tags "
+                "FROM rag_chunks "
+                f"WHERE id IN ({placeholders})"
+            )
+            params: List = candidate_ids
 
-        if project_id is not None:
-            sql += " AND project_id = ?"
-            params = candidate_ids + [project_id]
+            if project_id is not None:
+                sql += " AND project_id = ?"
+                params = candidate_ids + [project_id]
 
-        rows = self.conn.execute(sql, params).fetchall()
+            rows = conn.execute(sql, params).fetchall()
+        finally:
+            conn.close()
 
         # 4. Convertir a resultados con score (similitud = 1 - distancia)
         results = []
@@ -148,9 +152,13 @@ class RAGRetriever:
 
     def list_projects(self) -> List[int]:
         """Devuelve los project_id que tienen chunks indexados."""
-        rows = self.conn.execute(
-            "SELECT DISTINCT project_id FROM rag_chunks"
-        ).fetchall()
+        conn = sqlite3.connect(str(cfg.RAG_DB_PATH))
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT project_id FROM rag_chunks"
+            ).fetchall()
+        finally:
+            conn.close()
         return [r[0] for r in rows]
 
     # ------------------------------------------------------------------
@@ -158,8 +166,6 @@ class RAGRetriever:
     # ------------------------------------------------------------------
 
     def close(self):
-        if hasattr(self, "conn") and self.conn:
-            self.conn.close()
         if hasattr(self, "engine"):
             self.engine.close()
 

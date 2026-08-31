@@ -123,6 +123,20 @@ def main():
         st.session_state.last_user_message = original_prompt
         st.session_state.db.save_message(st.session_state.current_conversation_id, {"role": "user", "content": final_prompt})
 
+        # --- RAG retrieval ---
+        rag_context = ""
+        rag_sources = []
+        if st.session_state.get("rag_enabled", False) and st.session_state.get("rag_available", False):
+            project_id = active_project["id"] if active_project else None
+            if project_id:
+                retriever = st.session_state.rag_retriever
+                rag_sources = retriever.search(original_prompt, project_id=project_id, top_n=5)
+                if rag_sources:
+                    rag_context = "\n\n---\n\n".join(
+                        f"Fuente: {r['text_link']}\nContenido: {r['text']}"
+                        for r in rag_sources
+                    )
+
         # Mostrar mensaje de usuario
         with st.chat_message("user"):
             st.markdown(original_prompt)
@@ -147,6 +161,7 @@ def main():
                 is_reformulation,
                 st.session_state.reformulation_count,
                 project_system_prompt=(active_project.get("system_prompt") if active_project else None),
+                rag_context=rag_context,   # <--- RAG
             )
 
             try:
@@ -168,6 +183,13 @@ def main():
                         response_placeholder.markdown(full_response + "▌")
 
                 response_placeholder.markdown(full_response)
+                
+                # Mostrar fuentes RAG
+                if rag_sources:
+                    with st.expander(f"📚 Fuentes utilizadas ({len(rag_sources)})", expanded=False):
+                        for r in rag_sources:
+                            st.markdown(f"**Score:** {r['score']:.2f} | **Origen:** `{r['text_link']}`")
+                            st.write(r["text"][:500])
 
                 # Guardar respuesta final
                 st.session_state.messages.append({
@@ -193,5 +215,4 @@ def main():
         st.session_state.uploader_key += 1
         st.rerun()
 
-# Ejecutar la página. st.navigation invoca este script al seleccionar "Chat".
 main()
