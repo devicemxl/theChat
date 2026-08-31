@@ -98,6 +98,50 @@ def confirm_clear_conversation():
 
 # ========== BARRA DE HERRAMIENTAS SUPERIOR ==========
 
+def _render_project_selector():
+    """Selector de proyecto para la conversación actual.
+
+    Al cambiar, reasigna la conversación al proyecto elegido (o None para
+    'Sin proyecto') y hace rerun para reflejar el cambio en el sidebar.
+    """
+    db = st.session_state.db
+    current_id = st.session_state.current_conversation_id
+    current_conv = db.get_conversation(current_id)
+    current_project_id = current_conv.get("project_id") if current_conv else None
+
+    projects = db.get_projects()
+    project_map = {p["id"]: p for p in projects}
+
+    # None = "Sin proyecto" (siempre primero).
+    options = [None] + [p["id"] for p in projects]
+
+    def fmt(pid):
+        if pid is None:
+            return "— Sin proyecto —"
+        p = project_map[pid]
+        return f"{p['icon']} {p['name']}"
+
+    try:
+        current_idx = options.index(current_project_id)
+    except ValueError:
+        # El proyecto fue borrado por otro flujo — degradar a 'Sin proyecto'.
+        current_idx = 0
+
+    # Key único por conversación: evita que el widget quede pegado a un valor
+    # antiguo cuando se cambia de chat.
+    selected_pid = st.selectbox(
+        "Proyecto",
+        options=options,
+        index=current_idx,
+        format_func=fmt,
+        key=f"project_selector_{current_id}",
+    )
+
+    if selected_pid != current_project_id:
+        db.assign_conversation_to_project(current_id, selected_pid)
+        st.rerun()
+
+
 def render_toolbar():
     """Renderiza el expander superior con toda la configuración de sesión.
 
@@ -121,7 +165,7 @@ def render_toolbar():
     )
 
     with st.expander(label=header):
-        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
 
         with col1:
             configure_api_key()
@@ -158,10 +202,10 @@ def render_toolbar():
             if uploaded_files:
                 msgX = f"📎 Archivos adjuntos: {', '.join([f.name for f in uploaded_files])}"
 
-        with col5, col6:
-            ""
+        with col5:
+            _render_project_selector()
 
-        with col7:
+        with col6:
             st.caption("Vaciar Platica")
             if st.button("🗑️ ", key="btn_clear_top"):
                 # Abre el modal de confirmación en vez de limpiar directo.

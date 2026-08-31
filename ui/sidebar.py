@@ -72,9 +72,6 @@ def init_database():
     if "partial_response" not in st.session_state:
         st.session_state.partial_response = ""
 
-    if "editing_conv_id" not in st.session_state:
-        st.session_state.editing_conv_id = None
-
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
 
@@ -112,10 +109,27 @@ def load_conversation_messages(conversation_id: int) -> List[Dict]:
     return formatted_messages
 
 def create_new_conversation():
-    """Crea una nueva conversación y la establece como actual"""
+    """Crea una nueva conversación y la establece como actual.
+
+    Herencia de proyecto: si la conversación actual pertenece a un proyecto,
+    la nueva hereda ese proyecto. Racional: el 90% del tiempo, el usuario que
+    crea un chat nuevo mientras está viendo un proyecto quiere el nuevo en
+    ese mismo proyecto. Para uno sin proyecto lo cambia manualmente en el
+    selector del toolbar.
+    """
     db = st.session_state.db
     title = f"Conversación {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    # Detectar el proyecto de la conversación actual (si aplica).
+    parent_project_id = None
+    if "current_conversation_id" in st.session_state:
+        current = db.get_conversation(st.session_state.current_conversation_id)
+        if current:
+            parent_project_id = current.get("project_id")
+
     new_id = db.create_conversation(title)
+    if parent_project_id is not None:
+        db.assign_conversation_to_project(new_id, parent_project_id)
 
     st.session_state.current_conversation_id = new_id
     st.session_state.messages = []
@@ -160,61 +174,103 @@ def clear_current_conversation():
     st.success("🗑️ Conversación limpiada")
 
 def rename_conversation(conversation_id: int, new_title: str):
-    """Renombra una conversación existente"""
+    """DEPRECATED: usar _dialog_rename_conv directamente. Se mantiene por compat."""
     st.session_state.db.update_conversation_title(conversation_id, new_title)
     st.success(f"✅ Conversación renombrada a: {new_title}")
 
 
 # ========== INTERFAZ DEL SIDEBAR ==========
 
-def view_conversation_history():
-    """Renderiza el historial de conversaciones en el expander"""
-    conversations = st.session_state.db.get_conversations()
-    if "editing_conv_id" not in st.session_state:
-        st.session_state.editing_conv_id = None
-
-    for conv in conversations:
-        with st.expander(f"📄 {conv['title']}"):
-            st.write(f"**ID:** {conv['id']}")
-            st.write(f"**Creada:** {conv['created_at']}")
-            st.write(f"**Última actualización:** {conv['updated_at']}")
-            if conv['last_message']:
-                st.write(f"**Último mensaje:** {conv['last_message'][:100]}...")
-
-            if st.session_state.editing_conv_id == conv['id']:
-                new_title = st.text_input("Nuevo título", value=conv['title'], key=f"title_input_{conv['id']}")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("💾", key=f"save_title_{conv['id']}"):
-                        if new_title.strip():
-                            rename_conversation(conv['id'], new_title.strip())
-                            st.session_state.editing_conv_id = None 
-                            st.rerun()
-                        else:
-                            st.warning("El título no puede estar vacío")
-                with col2:
-                    if st.button("🗑️", help="Cancelar", key=f"cancel_edit_{conv['id']}"):
-                        st.session_state.editing_conv_id = None
-                        st.rerun()
+@st.dialog("Renombrar conversación")
+def _dialog_rename_conv(conv: Dict):
+    """Modal para renombrar una conversación."""
+    new_title = st.text_input("Nuevo título", value=conv["title"], key=f"rename_input_{conv['id']}")
+    col_ok, col_cancel = st.columns(2)
+    with col_ok:
+        if st.button("Guardar", type="primary", use_container_width=True, key=f"rename_ok_{conv['id']}"):
+            if not new_title.strip():
+                st.error("El título no puede estar vacío.")
             else:
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"**Título**\n\t{conv['title']}")
-                with col2:
-                    if st.button("✏️", key=f"edit_btn_{conv['id']}"):
-                        st.session_state.editing_conv_id = conv['id']
-                        st.rerun()
+                st.session_state.db.update_conversation_title(conv["id"], new_title.strip())
+                st.rerun()
+    with col_cancel:
+        if st.button("Cancelar", use_container_width=True, key=f"rename_cancel_{conv['id']}"):
+            st.rerun()
 
-            st.divider()
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("📂 Cargar", key=f"load_{conv['id']}"):
-                    switch_conversation(conv['id'])
-                    st.rerun()
-            with col2:
-                if st.button("🗑️ Borrar", key=f"delete_{conv['id']}"):
-                    delete_conversation(conv['id'])
-                    st.rerun()
+
+@st.dialog("Eliminar conversación")
+def _dialog_delete_conv(conv: Dict):
+    """Modal de confirmación para eliminar una conversación (soft delete)."""
+    st.warning(f"¿Eliminar la conversación **{conv['title']}**?")
+    st.caption("Los mensajes se ocultan pero permanecen en la base de datos.")
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("🗑️ Eliminar", type="primary", use_container_width=True, key=f"delconv_ok_{conv['id']}"):
+            delete_conversation(conv["id"])
+            st.rerun()
+    with col_no:
+        if st.button("Cancelar", use_container_width=True, key=f"delconv_cancel_{conv['id']}"):
+            st.rerun()
+
+
+def _render_conversation_row(conv: Dict):
+    """Renderiza una conversación como fila compacta con botones inline.
+
+    La conversación actual se marca con ▶️ y estilo primario.
+    """
+    is_current = conv["id"] == st.session_state.current_conversation_id
+    icon = "▶️" if is_current else "📄"
+    label = f"{icon} {conv['title']}"
+
+    col_title, col_edit, col_del = st.columns([6, 1, 1])
+    with col_title:
+        if st.button(
+            label,
+            key=f"load_{conv['id']}",
+            use_container_width=True,
+            type="primary" if is_current else "secondary",
+        ):
+            if not is_current:
+                switch_conversation(conv["id"])
+                st.rerun()
+    with col_edit:
+        if st.button("✏️", key=f"edit_{conv['id']}", help="Renombrar"):
+            _dialog_rename_conv(conv)
+    with col_del:
+        if st.button("🗑️", key=f"del_{conv['id']}", help="Eliminar"):
+            _dialog_delete_conv(conv)
+
+
+def view_conversation_history():
+    """Renderiza el historial agrupado por proyecto.
+
+    Cada proyecto se muestra como un expander; la sección 'Sin proyecto'
+    va siempre al final. Se auto-expande el grupo que contiene la
+    conversación activa para que el usuario vea dónde está parado.
+    """
+    db = st.session_state.db
+    groups = db.get_conversations_grouped()
+    current_id = st.session_state.current_conversation_id
+
+    for group in groups:
+        project = group["project"]
+        convs = group["conversations"]
+
+        if project:
+            label = f"{project['icon']} {project['name']} ({len(convs)})"
+        else:
+            label = f"📄 Sin proyecto ({len(convs)})"
+
+        # Auto-expandir el grupo que contiene la conversación actual.
+        contains_current = any(c["id"] == current_id for c in convs)
+
+        with st.expander(label, expanded=contains_current):
+            if not convs:
+                st.caption("_Sin conversaciones_")
+                continue
+            for conv in convs:
+                _render_conversation_row(conv)
+
 
 def render_sidebar():
     """Renderiza toda la barra lateral visualmente"""
@@ -228,8 +284,8 @@ def render_sidebar():
             create_new_conversation()
             st.rerun()
 
-        with st.expander("📚 Historial"):
-            view_conversation_history()
+        st.subheader("📚 Historial")
+        view_conversation_history()
 
         st.divider()
         with st.expander("📤 Exportar"):

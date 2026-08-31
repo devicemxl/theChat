@@ -96,6 +96,29 @@ class ChatDatabase:
                 ON conversations(project_id)
             ''')
 
+            # --- Migración 4: columnas para el pipeline RAG (preparación) ---
+            # Silent hooks para cuando exista HNSW: `indexed_at` marca cuándo se
+            # calcularon embeddings por última vez; `pending_reindex` es la flag
+            # que el worker background lee para saber qué chats mover en el índice.
+            # Ambas quedan NULL/0 hasta que el pipeline las use.
+            if 'indexed_at' not in existing_cols:
+                cursor.execute(
+                    "ALTER TABLE conversations ADD COLUMN indexed_at TIMESTAMP"
+                )
+            if 'pending_reindex' not in existing_cols:
+                cursor.execute(
+                    "ALTER TABLE conversations ADD COLUMN pending_reindex INTEGER DEFAULT 0"
+                )
+
+            # --- Migración 5: índice parcial para el worker de reindexado ---
+            # Solo indexa filas con pending_reindex=1, que serán poquísimas.
+            # WHERE en índice = mucho más chico que un índice sobre toda la tabla.
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_conversations_pending_reindex
+                ON conversations(pending_reindex)
+                WHERE pending_reindex = 1
+            ''')
+
             conn.commit()
 
             conn.commit()
