@@ -1,24 +1,13 @@
 """
-store.py - Atomic SQLite + HNSW insertion helpers.
+store.py - Atomic SQLite + HNSW insertion helpers for theChat RAG.
 
-The SQLite/HNSW pair has no native two-phase commit; this module provides
-the closest practical approximation for a prototype:
+Adaptado para theChat:
+  * Table `rag_chunks` with a mandatory `project_id` column.
+  * Stores the text content of each chunk alongside its embedding and tags.
+  * Uses a separate SQLite database (`rag_chunks.db`) and HNSW index file.
+  * All cross-store operations are atomic at the row level.
 
-  - insert_atomic():   per-row atomicity. Either both stores get the row
-                       or neither does. Post-crash inconsistencies are
-                       detected and (best-effort) repaired.
-  - checkpoint():      persist HNSW index and meta.json together.
-  - verify_consistency(): compare BD row count vs HNSW element count.
-  - ensure_schema():   idempotent table creation with the right indexes.
-
-Known limitations, by design:
-  * HNSW itself has no rollback. add_items() is treated as either
-    succeeding fully or leaving the index untouched (true for single-item
-    calls; NOT true for multi-item batches).
-  * A process crash between the SQLite COMMIT and the on-disk index save
-    (`checkpoint`) still causes divergence. verify_consistency() at
-    startup detects it; caller decides whether to rebuild.
-
+The original code was adapted from the standalone CogNeu RAG prototype.
 Copyright (c) 2026 CogNeu / David Ochoa.
 """
 
@@ -36,20 +25,24 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS documentos (
-    rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
-    embedding   BLOB    NOT NULL,
-    text_link   TEXT    NOT NULL,
-    tags        TEXT    NOT NULL DEFAULT '[]',
-    content_hash TEXT   DEFAULT NULL
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id   INTEGER NOT NULL,
+    text_link    TEXT    NOT NULL,
+    text         TEXT    NOT NULL,
+    embedding    BLOB    NOT NULL,
+    tags         TEXT    NOT NULL DEFAULT '[]',
+    content_hash TEXT    DEFAULT NULL,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_documentos_link ON documentos(text_link);
-CREATE INDEX IF NOT EXISTS idx_documentos_hash ON documentos(content_hash);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_project ON rag_chunks(project_id);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_link    ON rag_chunks(text_link);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_hash    ON rag_chunks(content_hash);
 """
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create the documentos table and indexes if missing."""
+    """Create the `rag_chunks` table and indexes if missing."""
     conn.executescript(SCHEMA_SQL)
     conn.commit()
 
@@ -74,15 +67,17 @@ def resize_if_needed(index, extra_slots: int = 1, growth_factor: int = 2) -> Non
 def insert_atomic(
     conn: sqlite3.Connection,
     index,
+    project_id: int,
     text_link: str,
+    text: str,
     tags: list[str],
     vec: np.ndarray,
     dim: int,
     content_hash: str | None = None,
 ) -> int:
     """
-    Insert a single (embedding, link, tags) row into SQLite AND the HNSW
-    index as one logical unit.
+    Insert a single chunk (embedding, link, text, tags, project_id) into
+    SQLite `rag_chunks` and the HNSW index as one logical unit.
 
     Sequence:
       1. BEGIN SQLite transaction.
@@ -114,9 +109,10 @@ def insert_atomic(
     added_to_index = False
     try:
         cursor = conn.execute(
-            "INSERT INTO documentos (embedding, text_link, tags, content_hash) "
-            "VALUES (?, ?, ?, ?)",
-            (emb_blob, text_link, tags_json, content_hash),
+            "INSERT INTO rag_chunks "
+            "(project_id, text_link, text, embedding, tags, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, text_link, text, emb_blob, tags_json, content_hash),
         )
         rowid = cursor.lastrowid
 
@@ -149,21 +145,40 @@ def link_or_hash_exists(
     conn: sqlite3.Connection,
     text_link: str,
     content_hash: str | None = None,
+    project_id: int | None = None,
 ) -> bool:
     """
     Return True if a row with the same text_link or content_hash already
-    exists. Callers use this to skip re-embedding unchanged content.
+    exists. Optionally restrict the check to a specific project_id.
+
+    Callers use this to skip re-embedding unchanged content.
     """
-    if content_hash is not None:
-        row = conn.execute(
-            "SELECT 1 FROM documentos WHERE text_link = ? OR content_hash = ? LIMIT 1",
-            (text_link, content_hash),
-        ).fetchone()
+    if project_id is not None:
+        if content_hash is not None:
+            row = conn.execute(
+                "SELECT 1 FROM rag_chunks "
+                "WHERE (text_link = ? OR content_hash = ?) AND project_id = ? "
+                "LIMIT 1",
+                (text_link, content_hash, project_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM rag_chunks "
+                "WHERE text_link = ? AND project_id = ? LIMIT 1",
+                (text_link, project_id),
+            ).fetchone()
     else:
-        row = conn.execute(
-            "SELECT 1 FROM documentos WHERE text_link = ? LIMIT 1",
-            (text_link,),
-        ).fetchone()
+        if content_hash is not None:
+            row = conn.execute(
+                "SELECT 1 FROM rag_chunks "
+                "WHERE text_link = ? OR content_hash = ? LIMIT 1",
+                (text_link, content_hash),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM rag_chunks WHERE text_link = ? LIMIT 1",
+                (text_link,),
+            ).fetchone()
     return row is not None
 
 
@@ -177,7 +192,7 @@ def verify_consistency(conn: sqlite3.Connection, index) -> tuple[int, int, bool]
     Returns (db_count, index_count, ok). Callers decide how to react
     (warn, rebuild index from BD, abort).
     """
-    row = conn.execute("SELECT COUNT(*) FROM documentos").fetchone()
+    row = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()
     db_count  = int(row[0])
     idx_count = int(index.element_count)
     return db_count, idx_count, (db_count == idx_count)
@@ -229,6 +244,6 @@ def unpack_blob(blob: bytes, dim: int) -> np.ndarray:
 def iter_all_embeddings(
     conn: sqlite3.Connection, dim: int
 ) -> Iterable[tuple[int, np.ndarray]]:
-    """Yield (rowid, vec) for every row in documentos."""
-    for rowid, blob in conn.execute("SELECT rowid, embedding FROM documentos"):
+    """Yield (rowid, vec) for every row in rag_chunks."""
+    for rowid, blob in conn.execute("SELECT id, embedding FROM rag_chunks"):
         yield rowid, unpack_blob(blob, dim)
