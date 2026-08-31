@@ -3,259 +3,179 @@
 | key             | value                                                              |
 |-----------------|--------------------------------------------------------------------|
 | tipo            | technical document · system architecture                           |
-| tema            | software architecture · personal chat interface                    |
+| tema            | software architecture · personal chat interface + RAG              |
 | titulo          | theChat Architecture                                               |
-| maturity        | current implementation + planned RAG extension                     |
+| maturity        | current implementation (chat + RAG) + planned tKE layers           |
 | confidence      | high (current) · medium (planned)                                  |
-| material origen | development log through August 2026                                |
-| fecha           | 2026-08-31                                                         |
+| material origen | development log through 2026 + integración RAG real                |
+| fecha           | 2026 (actualizado en Fase 0)                                       |
 | mantenedor      | David                                                              |
 
 ## 1. Scope
 
-This document describes the current architecture of theChat as of August 2026
-and the planned RAG extension. The RAG section is a design plan — no RAG code
-exists yet in the repository. Schema-level hooks are already in place, but no
-ingestion, embedding, or retrieval logic is implemented.
+theChat es una app Streamlit de chat multi-proveedor con historial SQLite,
+proyectos y un motor RAG funcional. Este documento describe la arquitectura
+actual (chat + RAG) y las capas planeadas del modelo tKE (conversaciones,
+herramientas, código).
 
-Everything under "Current architecture" reflects code that ships and runs.
-Everything under "Planned RAG extension" is intent, subject to revision when
-it becomes real.
+Todo lo marcado como "implementado" corre hoy. Lo marcado como "planeado"
+es diseño sujeto a revisión.
 
 ## 2. Design principles
 
-**Simplicity over abstraction.** The application is a single Streamlit process
-against a local SQLite file. There is no service layer, no daemon, no queue.
-When RAG lands, the vector index lives beside the SQLite file as another local
-artifact.
+- **Simplicidad sobre abstracción**: un solo proceso Streamlit, SQLite local,
+  índice vectorial HNSW como archivo local.
+- **Separación por módulos claros**: `views/`, `ui/`, `utils/`, `llm/`, `rag/`,
+  `database.py`.
+- **Migraciones idempotentes**: `_migrate()` escribe solo columnas/índices que
+  faltan, nunca destruye datos.
+- **Referencias, no copias**: fork de conversaciones y RAG de memoria usan
+  `parent_message_id` (Fase 1+).
+- **Seguridad por plan, no por paso**: en Code Mode el agente propone un plan,
+  el usuario lo aprueba, git da red de seguridad (Fase 5+).
 
-**Separation of concerns without over-engineering.** The code splits into
-`views/` (Streamlit pages), `ui/` (reusable sidebar/toolbar/components),
-`utils/` (config, constants, file I/O, import/export), `llm/` (API adapters),
-and a single `database.py` for persistence. No dependency injection framework,
-no repository pattern — just modules with clear names.
-
-**Idempotent migrations.** The database evolves through additive migrations
-that run on every startup. Adding a column or an index never depends on
-knowing the previous state. Data is never destroyed by a migration.
-
-**Personal scope.** No authentication, no multi-tenant model, no remote
-storage, no permissions. The user is one person on one machine.
-
-## 3. Current architecture
-
-### 3.1 Component layout
+## 3. Component layout
 
 ```
 Streamlit process
 ├── app.py                    entry point, st.navigation
-│
-├── views/                    top-level pages
-│   ├── chat.py               conversation flow
-│   ├── projects.py           project CRUD
-│   └── ingest.py             stub (RAG placeholder)
-│
-├── ui/                       cross-view components
-│   ├── sidebar.py            history grouped by project
-│   ├── toolbar.py            provider/mode/effort/project selector
-│   └── components.py         CSS + copy button
-│
-├── llm/api_clients.py        streaming clients: DeepSeek, Gemini,
-│                             Mistral, Anthropic + context builder
-│
-├── utils/                    config, constants, file I/O, import/export
-│
-└── database.py               ChatDatabase over SQLite
-        │
-        └── chat_history.db   local file
+├── views/
+│   ├── chat.py               conversación + integración RAG
+│   ├── projects.py           CRUD proyectos
+│   └── ingest.py             Data & RAG: subida, ingesta, progreso
+├── ui/
+│   ├── sidebar.py            historial agrupado, init_database, estado RAG
+│   ├── toolbar.py            provider/modo/esfuerzo/proyecto + toggle RAG
+│   └── components.py         CSS, copy button, helpers
+├── llm/
+│   └── api_clients.py        streaming: DeepSeek, Gemini, Mistral, Anthropic
+├── rag/
+│   ├── config.py             rutas de modelo, BD, índice
+│   ├── engine.py             wrapper ctypes GleannEngine + SentencePiece
+│   ├── store.py              schema rag_chunks + inserciones atómicas + HNSW
+│   ├── ingestor.py           ingesta semántica (chunking + DeepSeek + embed)
+│   ├── retriever.py          búsqueda HNSW + filtrado por proyecto
+│   └── discovery.py          scanner de archivos del proyecto
+├── agent/
+│   └── config.py             constantes para Code Mode (futuro)
+├── utils/
+│   ├── config.py             get_secret
+│   ├── constants.py          paleta de colores
+│   ├── extensions.py         ÚNICA fuente de verdad de extensiones/exclusiones
+│   ├── file_handler.py       extracción central de texto (chat + RAG)
+│   └── data_export.py        import/export
+├── database.py               ChatDatabase sobre SQLite
+└── chat_history.db           SQLite (conversaciones, mensajes, proyectos)
 ```
 
-### 3.2 Data model
+## 4. Data model
 
-Three tables in `chat_history.db`:
+### 4.1 `chat_history.db`
 
 **conversations**
 
-| column           | type      | notes                                          |
-|------------------|-----------|------------------------------------------------|
-| id               | INTEGER   | primary key                                    |
-| title            | TEXT      | user-editable                                  |
-| created_at       | TIMESTAMP |                                                |
-| updated_at       | TIMESTAMP | updated on each message                        |
-| message_count    | INTEGER   |                                                |
-| is_active        | INTEGER   | soft-delete flag                               |
-| project_id       | INTEGER   | nullable — NULL means "no project"             |
-| indexed_at       | TIMESTAMP | reserved for RAG (currently NULL)              |
-| pending_reindex  | INTEGER   | reserved for RAG (currently 0)                 |
+| columna           | tipo      | notas                                   |
+|-------------------|-----------|-----------------------------------------|
+| id                | INTEGER   | PK                                      |
+| title             | TEXT      |                                         |
+| created_at        | TIMESTAMP |                                         |
+| updated_at        | TIMESTAMP |                                         |
+| message_count     | INTEGER   |                                         |
+| is_active         | INTEGER   | soft-delete                             |
+| project_id        | INTEGER   | NULL = sin proyecto                     |
+| indexed_at        | TIMESTAMP | reservado para memoria de conversaciones|
+| pending_reindex   | INTEGER   | reservado para worker de reindexado     |
 
 **messages**
 
-| column                | type      | notes                                     |
-|-----------------------|-----------|-------------------------------------------|
-| id                    | INTEGER   | primary key                               |
-| conversation_id       | INTEGER   | foreign key (not enforced)                |
-| role                  | TEXT      | user / assistant / system                 |
-| content               | TEXT      |                                           |
-| truncated             | INTEGER   | 1 if streaming was interrupted            |
-| interrupted_at        | TEXT      | timestamp of interruption                 |
-| reformulation_count   | INTEGER   |                                           |
-| created_at            | TIMESTAMP |                                           |
+| columna            | tipo      | notas                                  |
+|--------------------|-----------|----------------------------------------|
+| id                 | INTEGER   | PK                                     |
+| conversation_id    | INTEGER   | FK lógico                              |
+| role               | TEXT      | user / assistant / system              |
+| content            | TEXT      |                                        |
+| truncated          | INTEGER   |                                        |
+| interrupted_at     | TEXT      |                                        |
+| reformulation_count| INTEGER   |                                        |
+| created_at         | TIMESTAMP |                                        |
+| parent_message_id  | INTEGER   | NUEVO — para fork por referencia (Fase 1) |
 
 **projects**
 
-| column         | type      | notes                                         |
-|----------------|-----------|-----------------------------------------------|
-| id             | INTEGER   | primary key                                   |
-| name           | TEXT      | UNIQUE                                        |
-| description    | TEXT      | nullable                                      |
-| system_prompt  | TEXT      | nullable — if set, replaces default in chat   |
-| icon           | TEXT      | emoji, default "📁"                            |
-| color          | TEXT      | hex, from a curated palette of 8              |
-| created_at     | TIMESTAMP |                                               |
+| columna        | tipo      | notas                          |
+|----------------|-----------|--------------------------------|
+| id             | INTEGER   | PK                             |
+| name           | TEXT      | UNIQUE                         |
+| description    | TEXT      |                                |
+| system_prompt  | TEXT      | reemplaza al default si no vacío|
+| icon           | TEXT      | emoji                          |
+| color          | TEXT      | hex                            |
+| created_at     | TIMESTAMP |                                |
 
-Projects are hard-deleted (no `is_active` flag) because they carry no message
-history themselves. When a project is deleted, its conversations are
-reassigned to `project_id = NULL` — never cascaded away.
+### 4.2 `rag_data/rag_chunks.db`
 
-Indexes: `idx_conversations_project` on `(project_id)`, plus a partial index
-`idx_conversations_pending_reindex` on `(pending_reindex)` restricted to rows
-where `pending_reindex = 1`. The partial index costs almost nothing until
-RAG starts using it.
+**rag_chunks** (esquema ampliado tKE)
 
-### 3.3 Query flow (chat)
+| columna            | tipo      | notas                                     |
+|--------------------|-----------|-------------------------------------------|
+| id                 | INTEGER   | PK                                        |
+| project_id         | INTEGER   | filtro obligatorio en retrieval           |
+| text_link          | TEXT      | formato estable (documento, o `conv:...`) |
+| text               | TEXT      | contenido del chunk                       |
+| embedding          | BLOB      | vector INT8 cuantizado                    |
+| tags               | TEXT      | JSON array                                |
+| content_hash       | TEXT      | deduplicación                             |
+| created_at         | TIMESTAMP |                                           |
+| kind               | TEXT      | `document`, `conversation`, `tool`, `code`|
+| status             | TEXT      | `indexed`, `pending`, `needs_user_input`  |
+| source_path        | TEXT      | ruta del archivo original (código/docs)   |
+| source_message_id  | INTEGER   | mensaje de origen (conversación)          |
+| parent_message_id  | INTEGER   | cadena de fork (conversación)             |
+| narrativa          | TEXT      | descripción semántica (código descifrado) |
 
-1. User types in the chat input and optionally attaches files.
-2. `views/chat.py` extracts file text via `utils/file_handler.py` and appends
-   it to the user turn.
-3. The turn is persisted to `messages` via `ChatDatabase.save_message`.
-4. `llm/api_clients.py::build_context_with_reformulation_awareness` composes
-   the request:
-   - If the active conversation belongs to a project with a `system_prompt`,
-     that prompt replaces the default and the reformulation hint is skipped.
-   - Otherwise, the default prompt is used, extended with a reformulation
-     hint when detected.
-5. The correct provider's streaming function is called with the composed
-   messages. The response is streamed token by token to the UI and, on
-   completion, persisted.
+Índices: project_id, text_link, content_hash, kind, status, source_message_id.
 
-### 3.4 Multi-provider adapter
+## 5. Flujo de chat actual
 
-Each provider has a `stream_<provider>_completion` function in
-`llm/api_clients.py`. All follow the same shape: take `(messages, api_key,
-**provider_kwargs)`, return a generator of text chunks.
+1. El usuario escribe y opcionalmente adjunta archivos.
+2. `views/chat.py` extrae el texto con `utils/file_handler.py::extract_text_from_bytes`
+   (única implementación compartida con RAG).
+3. El mensaje se guarda en `messages`.
+4. Si RAG está activo (`st.session_state.rag_enabled`) y el chat pertenece a un
+   proyecto con chunks, `RAGRetriever.search()` obtiene los top-N y se inyectan
+   como contexto adicional al system prompt.
+5. `build_context_with_reformulation_awareness` arma el contexto (system prompt
+   del proyecto o default + contexto RAG + historial).
+6. El streaming del proveedor elegido se ejecuta y la respuesta se persiste.
+7. Si hubo fuentes RAG, se muestran en un expander con score y `text_link`.
 
-Provider-specific quirks are handled inside the function:
+## 6. RAG pipeline (implementado)
 
-- **DeepSeek / Mistral**: OpenAI-compatible schema, SSE streaming.
-- **Gemini**: system message extracted from the array into a `system_instruction` field; roles remapped (`assistant` → `model`).
-- **Anthropic**: `system` extracted to a top-level field; SSE stream carries
-  `content_block_delta` events with `text_delta` payloads.
+- **Ingesta** (`rag/ingestor.py`): modo `semantic` — extraer texto, normalizar NFC,
+  sliding window (2000 chars, overlap 500), DeepSeek extrae unidades/resumen/tags,
+  embeddings con GleannEngine (EmbeddingGemma 256d, INT8), inserción atómica
+  SQLite + HNSW, checkpoint final.
+- **Retrieval** (`rag/retriever.py`): embed query con prefijo, HNSW kNN (k=50),
+  filtrado por `project_id` en SQLite, top_n por score.
+- **Almacenamiento**: `rag_data/rag_chunks.db` + `hnsw_index.bin` +
+  `hnsw_index_meta.json`.
+- **Motor**: `rag/engine.py` — ctypes sobre `gleann_engine.dll` y `sp_wrap.dll`,
+  prefijos de tarea (query/document), cuantización bloque-wise int8.
+- **Robustez**: si el índice no existe o está corrupto, se reconstruye desde la BD
+  o se crea vacío. La ingesta nunca se bloquea por un bin faltante.
+- **Duplicados**: hash de contenido (unidad, página, documento) para evitar
+  re-embedir.
 
-Provider selection is stored in `session_state.api_provider` and mapped to
-its key. Adding a fifth provider is one function plus one branch in
-`toolbar.configure_api_key`.
+## 7. Estado de capas tKE
 
-### 3.5 Navigation
+| Capa               | Estado        | Notas                             |
+|--------------------|---------------|-----------------------------------|
+| Documents          | ✅ Implementada| chunks con kind='document'        |
+| Conversations      | 🔲 Preparada   | columnas y parent_message_id listos; falta worker |
+| Tools              | 🔲 Diseño      | catálogo Python + function calling|
+| Code               | 🔲 Diseño      | narrativa/descifrado, Fase 4      |
 
-Streamlit's `st.navigation` (available from 1.36) drives page selection.
-`app.py` declares three `st.Page` entries and delegates rendering via
-`pg.run()`. Each view is a standalone script that runs top-to-bottom when
-selected.
+## 8. Non-goals
 
-`set_page_config` and CSS injection live in `app.py` so they run once per
-session, not once per page.
-
-### 3.6 State management
-
-All shared state lives in `st.session_state`. The critical keys:
-
-- `db` — the `ChatDatabase` instance (initialized once)
-- `current_conversation_id` — the active chat
-- `messages` — in-memory copy of the current chat's messages
-- `api_provider`, `api_key`, `api_brainer` — provider selection and effort
-- `agent_mode` — "chat" or "code" (code mode currently does nothing extra)
-
-`session_state` survives view switches. This is what makes the multi-view
-navigation coherent: you can browse to Projects, come back, and pick up
-where you left off.
-
-### 3.7 Cleanup logic
-
-Empty conversations (zero messages) are hard-deleted on two occasions:
-
-- **On startup** in `ChatDatabase.__init__`, before creating the new
-  conversation for this session. The order matters — sweeping before creation
-  means the new one is never exposed to the delete.
-- **On switch** in `sidebar.switch_conversation`, with the incoming
-  conversation ID excluded from the sweep. This protects a conversation the
-  user is deliberately loading even if it happens to be empty.
-
-Both use `ChatDatabase.delete_empty_conversations(exclude_ids=...)`.
-
-## 4. Planned RAG extension
-
-Everything below is a design plan. None of it is implemented as of this
-document's date.
-
-### 4.1 Retrieval strategy
-
-The core idea: a single HNSW index shared across projects, with `project_id`
-as a filter column in the metadata database. Because HNSW returns IDs (not
-data), filtering by project happens in SQLite after the graph traversal, at
-zero index-lookup cost.
-
-Trade-off: naive post-filtering degrades recall when a filter is very
-selective. Mitigations under consideration:
-
-1. **Over-retrieval with adaptive expansion**: request K far larger than
-   needed and stop when the filtered set is large enough.
-2. **Namespace partitioning inside the graph**: chunks from different projects
-   are never neighbors, so search inside a project skips the rest of the graph
-   naturally.
-3. **Filtered HNSW**: filter evaluation during graph traversal (as in Qdrant
-   and Weaviate). Best recall/latency but complex to implement well.
-
-Option 1 is the plan for the first iteration. Option 2 or 3 is a later
-optimization if it becomes necessary.
-
-### 4.2 Move-a-chat semantics
-
-Moving a conversation between projects is currently a single-column UPDATE.
-When RAG exists, the same operation must also update the vector index
-association. Two possible UX flows:
-
-- **Blocking with confirmation**: modal warns "N chunks will be re-associated
-  (~T seconds)". OK triggers a synchronous operation with a spinner.
-- **Instant + background reindex**: the UPDATE is immediate; a
-  `pending_reindex = 1` flag is set; a worker processes it later. The chat is
-  temporarily inconsistent for RAG queries.
-
-The database schema is already prepared for the second flow: `indexed_at`
-and `pending_reindex` columns exist, and the partial index on
-`pending_reindex = 1` makes worker polling trivially cheap.
-
-### 4.3 Embedding provider chain
-
-Primary target: [gleann](https://github.com) (my quantized vector engine)
-with EmbeddingGemma at 512 dims (MRL truncation, block-wise int8). Local,
-private, fast.
-
-Fallbacks under consideration if gleann is unavailable on a given platform:
-Mistral embed API, DeepSeek embed API. This chain is a plan, not a
-resilience feature — the primary is expected to work.
-
-### 4.4 Ingestion
-
-The `views/ingest.py` page will host the ingestion UI: multi-file uploader,
-destination project selector, quick/deep processing choice, progress log.
-
-- **Quick**: extract text → chunk with sliding window → embed → insert.
-- **Deep**: same, but each chunk is first passed through a small LLM
-  (candidates: Qwen3-0.6B, OpenELM-270M via nxDeck) to extract semantic
-  units, generate a summary, and assign tags. The tags feed hybrid search.
-
-### 4.5 What does not extend
-
-Multi-user support, authentication, permissions, remote deployment,
-container orchestration, cross-project search UI. These are explicitly out
-of scope.
+Sin autenticación multi-usuario, sin despliegue remoto, sin búsqueda
+cross-proyecto en la UI, sin RAG-on automático (el usuario controla el toggle).

@@ -2,14 +2,7 @@ import io
 from pathlib import Path
 from typing import List, Dict, Tuple
 
-
-# Extensiones que requieren un extractor especial (binario o formato estructurado).
-# Todo lo demás se intenta leer como texto UTF-8.
-SPECIAL_EXTRACTION = {
-    ".pdf": "pdf",
-    ".docx": "docx",
-    ".csv": "csv",
-}
+from utils.extensions import BINARY_EXTENSIONS
 
 
 def extract_text_from_bytes(data: bytes, filename: str) -> str:
@@ -35,6 +28,9 @@ def extract_text_from_bytes(data: bytes, filename: str) -> str:
             import pandas as pd
             df = pd.read_csv(io.BytesIO(data))
             return df.to_string()
+
+        if ext in BINARY_EXTENSIONS:
+            return f"[Formato binario no soportado: {ext}]"
 
         # Texto plano: intento genérico con UTF-8.
         return data.decode("utf-8", errors="ignore").strip()

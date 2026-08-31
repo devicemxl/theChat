@@ -12,6 +12,7 @@ Copyright (c) 2026 CogNeu / David Ochoa.
 """
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -22,53 +23,22 @@ from pathlib import Path
 #       ".aspx.txt"), which was a real bug in the previous version.
 # ---------------------------------------------------------------------------
 
-CODE_EXTENSIONS = frozenset({
-    ".py", ".js", ".ts", ".java", ".c", ".h", ".cpp", ".hpp",
-    ".cs", ".rb", ".php", ".go", ".rs", ".swift", ".kt", ".sql",
-})
+# Permitir import de utils/ cuando se ejecuta como script
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-WEB_EXTENSIONS = frozenset({
-    ".html", ".htm", ".xhtml", ".xml", ".rdf", ".css",
-    ".svg", ".rss", ".atom", ".asp", ".aspx",
-})
-
-DATA_EXTENSIONS = frozenset({
-    ".json", ".yaml", ".yml", ".toml", ".sh", ".ini", ".cfg",
-})
-
-DOC_EXTENSIONS = frozenset({
-    ".txt", ".md", ".rst", ".ipynb",
-})
-
-# Binary/office formats. These need an extractor before feeding an embedder;
-# discovery lists them separately so plain-text pipelines can skip them.
-BINARY_EXTENSIONS = frozenset({
-    ".doc", ".docx", ".dot", ".dotx",
-    ".xls", ".xlsx", ".xlsm", ".xlt", ".xltx",
-    ".ppt", ".pptx", ".pptm", ".pot", ".potx",
-    ".mdb", ".accdb", ".pub", ".one",
-    ".pdf",
-})
-
-TEXT_EXTENSIONS = (CODE_EXTENSIONS | WEB_EXTENSIONS
-                   | DATA_EXTENSIONS | DOC_EXTENSIONS)
-
-# Union of everything discovery knows about.
-ALL_EXTENSIONS = TEXT_EXTENSIONS | BINARY_EXTENSIONS
-
-# Legacy aliases (kept for the earlier ingest scripts).
-ALLOWED_EXTENSIONS = ALL_EXTENSIONS
-
-
-# Directory names to skip during traversal. Anything that is virtually
-# guaranteed to be noise for a retrieval index.
-DEFAULT_EXCLUDES = frozenset({
-    ".git", ".hg", ".svn",
-    "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    "node_modules", ".venv", "venv", "env",
-    "build", "dist", "target", "out", ".idea", ".vscode",
-})
-
+from utils.extensions import (
+    CODE_EXTENSIONS,
+    WEB_EXTENSIONS,
+    DATA_EXTENSIONS,
+    DOC_EXTENSIONS,
+    BINARY_EXTENSIONS,
+    TEXT_EXTENSIONS,
+    ALL_EXTENSIONS,
+    ALLOWED_EXTENSIONS,
+    DEFAULT_EXCLUDES,
+)
 
 # ---------------------------------------------------------------------------
 # Public API

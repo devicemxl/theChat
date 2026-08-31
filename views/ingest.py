@@ -19,6 +19,8 @@ import streamlit as st
 from database import ChatDatabase
 from ui.components import load_custom_css  # noqa: F401  (CSS ya cargado en app.py)
 
+from utils.extensions import TEXT_EXTENSIONS
+
 import traceback
 
 
@@ -167,10 +169,13 @@ selected_project_id = st.selectbox(
 )
 
 # 4. Uploader multiarchivo
+upload_types = sorted(
+    {ext.lstrip(".") for ext in TEXT_EXTENSIONS} | {"pdf", "docx", "csv"}
+)
+
 uploaded_files = st.file_uploader(
     "Sube documentos",
-    type=["txt", "md", "pdf", "docx", "csv", "json", "py", "js",
-          "html", "css", "xml", "sql"],
+    type=upload_types,
     accept_multiple_files=True,
     help="Formatos soportados: texto, Markdown, PDF, DOCX, CSV, JSON, código.",
 )

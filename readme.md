@@ -13,72 +13,66 @@ It is not a platform, a product, or something designed for multiple users. It
 runs locally against a SQLite file. If it happens to be useful for someone
 else, good — but that is not the point.
 
+It runs locally against SQLite. No multi-user, no cloud.
+
 ## What works today
 
-- **Chat with four providers**: DeepSeek, Gemini, Mistral, Anthropic. Streaming
-  responses. Provider is switchable per turn from the toolbar.
-- **Project organization**: conversations can be grouped into projects. Each
-  project has a name, emoji, color, description, and optional system prompt.
-- **System prompt per project**: when set, replaces the default prompt for
-  every chat in that project (and disables the reformulation hint). Useful for
-  pipeline-style roles where you want the model to behave in a very specific
-  way.
-- **Conversation management**: create, rename, delete, export to JSON, import
-  from JSON. Empty conversations get cleaned up on startup and on switch.
-- **Reformulation detection**: keyword-based signal to the model that the user
-  is asking for a revised answer, when no project prompt is active.
-- **Confirmation modals** for destructive actions (clear conversation, delete
-  project, delete chat).
-- **File attachments in chat**: text, markdown, PDF, DOCX, CSV, JSON, and code
-  files can be pasted as attachments; their text content is inlined into the
-  user turn.
+- **Chat with four providers**: streaming responses, provider switchable per turn.
+- **Projects**: name, emoji, color, description, optional system prompt that
+  replaces the default.
+- **RAG pipeline (implemented)**:
+  - Ingest documents (txt, md, pdf, docx, csv, json, code) from the Data view.
+  - Semantic chunking + summaries + tags via DeepSeek.
+  - Local embeddings (EmbeddingGemma 256d, INT8) via ctypes DLLs.
+  - HNSW vector index + SQLite chunk store.
+  - Chat retrieval: toggle RAG, search within the active project, show sources.
+- **Conversation management**: create, rename, delete, export/import, cleanup.
+- **File attachments in chat**: same extraction engine as RAG.
 - **Persistent SQLite backend** with idempotent migrations.
 
 ## What is planned but not built
 
-- **RAG pipeline**: document ingestion, embeddings, HNSW vector search, hybrid
-  retrieval. Schema hooks (`indexed_at`, `pending_reindex` columns) already
-  exist in the database as silent preparation, but no code produces or consumes
-  them yet.
-- **The Data view** (`views/ingest.py`): currently a stub page. Will host the
-  document upload and indexing pipeline when RAG is implemented.
-- **Agent loop for the Code mode**: the toolbar has a "chat / code" toggle, but
-  the code mode currently changes nothing about the request. The planned
-  behavior is a tool-calling loop over a filesystem with a git-backed
-  approval flow.
-- **Integration with the CogNeu stack**: eventually the RAG layer will use
-  [gleann](https://github.com/) (my quantized vector engine) and VivaceGraph
-  as the vector/graph substrate. Today the code depends on no CogNeu component.
-
-Design documents for the planned pieces live in `docs/` and are labeled as
-draft plans, not descriptions of shipped behavior.
+- **Fork conversations** and delete last turn (schema ready: `parent_message_id`).
+- **Memory of conversations** (index chats as RAG chunks).
+- **Tool calling / agent loop**: the `chat/code` toggle currently has no effect.
+- **Code indexing by narrative** and full Code Mode with git approval.
+- **Fast ingestion mode** (without DeepSeek) and query caching.
 
 ## Project structure
 
 ```
 theChat/
-├── app.py                    # Entry point: st.navigation + global config
-├── database.py               # ChatDatabase: SQLite persistence + migrations
+├── app.py                    # entry point: st.navigation + CSS
+├── database.py               # ChatDatabase: SQLite + migraciones idempotentes
 ├── views/
-│   ├── chat.py               # Chat view (main interaction)
-│   ├── projects.py           # Projects CRUD
-│   └── ingest.py             # Data & RAG (stub — planned)
+│   ├── chat.py               # chat + integración RAG
+│   ├── projects.py           # CRUD proyectos
+│   └── ingest.py             # Data & RAG: ingesta con progreso
 ├── ui/
-│   ├── sidebar.py            # Sidebar: grouped history, export/import, stats
-│   ├── toolbar.py            # Top toolbar: provider, mode, effort, project
-│   └── components.py         # Reusable pieces (CSS, copy button)
-├── utils/
-│   ├── config.py             # get_secret helper
-│   ├── constants.py          # PROJECT_COLORS palette
-│   ├── file_handler.py       # File text extraction
-│   └── data_export.py        # Conversation import/export
+│   ├── sidebar.py            # historial agrupado, init_database
+│   ├── toolbar.py            # toolbar + toggle RAG
+│   └── components.py         # CSS, copy button
 ├── llm/
-│   └── api_clients.py        # Streaming clients + context builder
-├── docs/                     # Design documents (current + planned)
-├── .streamlit/
-│   ├── config.toml
-│   └── secrets.toml          # API keys, not committed
-└── chat_history.db           # SQLite file, created on first run
+│   └── api_clients.py        # streaming: DeepSeek, Gemini, Mistral, Anthropic
+├── rag/
+│   ├── config.py             # rutas y parámetros RAG
+│   ├── engine.py             # GleannEngine: ctypes + SentencePiece
+│   ├── store.py              # schema rag_chunks + inserción atómica
+│   ├── ingestor.py           # ingesta semántica (DeepSeek + embeddings)
+│   ├── retriever.py          # búsqueda HNSW + filtro por proyecto
+│   └── discovery.py          # scanner de archivos
+├── agent/
+│   └── config.py             # constantes para Code Mode (futuro)
+├── utils/
+│   ├── config.py             # get_secret
+│   ├── constants.py          # colores
+│   ├── extensions.py         # única fuente de extensiones/exclusiones
+│   ├── file_handler.py       # extracción de texto central (chat + RAG)
+│   └── data_export.py        # export/import
+├── rag_data/                 # rag_chunks.db, hnsw_index.bin, meta
+├── models/                   # EmbeddingGemma (no commiteado)
+├── runtime/                  # DLLs gleann/sp_wrap (no commiteado)
+└── chat_history.db           # SQLite, creado en primer arranque
 ```
 
 ## Installation
