@@ -5,3 +5,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+# Archivos y carpetas del motor RAG (grandes/binarios)
+rag_data/
+models/
+runtime/
+*.dll
+*.bin

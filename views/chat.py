@@ -36,10 +36,6 @@ def main():
     init_database()
     render_sidebar()
 
-    # 3. Barra de herramientas superior (extraída en ui/toolbar.py)
-    uploaded_files, api_key_ok = render_toolbar()
-    if not api_key_ok:
-        return
 
     # El proyecto activo se consulta acá también para pasar su system_prompt
     # al build_context más abajo. El indicador visual vive dentro del toolbar.
@@ -77,6 +73,10 @@ def main():
                 st.caption(f"🔄 *Reformulado {msg['reformulation_count']} veces*")
                 
 
+    # 3. Barra de herramientas superior (extraída en ui/toolbar.py)
+    uploaded_files, api_key_ok = render_toolbar()
+    if not api_key_ok:
+        return
     # 
     # ============================================
     # 
