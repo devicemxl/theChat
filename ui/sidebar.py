@@ -107,6 +107,7 @@ def load_conversation_messages(conversation_id: int) -> List[Dict]:
         if msg["role"] == "user" and "--- Contenido de '" in content:
             prompt, files = extract_files_from_message(content)
             formatted_messages.append({
+                "id": msg["id"],                     # ← NUEVO
                 "role": msg["role"],
                 "content": content,
                 "display_content": prompt,
@@ -117,6 +118,7 @@ def load_conversation_messages(conversation_id: int) -> List[Dict]:
             })
         else:
             formatted_messages.append({
+                "id": msg["id"],                     # ← NUEVO
                 "role": msg["role"],
                 "content": msg["content"],
                 "truncated": msg["truncated"],

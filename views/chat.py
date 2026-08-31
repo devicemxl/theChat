@@ -17,6 +17,9 @@ from llm.api_clients import (
     stream_anthropic_completion,
 )
 
+from ui.sidebar import init_database, render_sidebar, load_conversation_messages
+from ui.sidebar import switch_conversation
+
 # --- Funciones auxiliares (colocar al inicio, después de imports) ---
 
 def render_user_message(msg: dict):
@@ -52,6 +55,7 @@ def main():
 
     # 4. Dibujar Historial de Mensajes
     for idx, msg in enumerate(st.session_state.messages):
+        is_last = idx == len(st.session_state.messages) - 1
         with st.chat_message(msg["role"]):
             if msg["role"] == "user":
                 render_user_message(msg)
@@ -65,11 +69,46 @@ def main():
 
             if msg.get("truncated", False):
                 st.caption("⚠️ *Mensaje truncado*")
-            
+
             if (msg.get("reformulation_count") or 0) > 0:
                 st.caption(f"🔄 *Reformulado {msg['reformulation_count']} veces*")
-                
 
+            # --- Acciones sobre el último mensaje ---
+            # --- Acciones sobre el último mensaje ---
+            if is_last and msg["role"] == "assistant":
+                conversation_id = st.session_state.current_conversation_id
+                conv = st.session_state.db.get_conversation(conversation_id)
+                own_messages = st.session_state.db.get_messages(conversation_id)
+
+                # Solo si hay un turno completo propio (último es assistant)
+                has_own_turn = len(own_messages) >= 2 and own_messages[-1]["role"] == "assistant"
+                is_branch = bool(conv.get("forked_from_conversation_id"))
+
+                col_fork, col_delete, _ = st.columns([1, 1, 3])
+                with col_fork:
+                    if not is_branch and has_own_turn:
+                        if st.button("🌿 Fork", key=f"fork_{msg['id']}", use_container_width=True):
+                            fork_point = own_messages[-1]["id"]
+                            new_id = st.session_state.db.create_fork(conversation_id, fork_point)
+                            switch_conversation(new_id)
+                            st.rerun()
+                with col_delete:
+                    if has_own_turn:
+                        if st.button("🗑️ Eliminar turno", key=f"del_turn_{msg['id']}", use_container_width=True):
+                            deleted = st.session_state.db.delete_last_turn(conversation_id)
+                            if deleted:
+                                st.toast("🗑️ Turno eliminado", icon="✅")
+                            else:
+                                st.toast("⚠️ No se pudo eliminar el turno", icon="⚠️")
+                            st.session_state.messages = load_conversation_messages(conversation_id)
+                            st.rerun()
+                
+    # Si la conversación es una rama sin mensajes propios, avisarlo
+    conv = st.session_state.db.get_conversation(st.session_state.current_conversation_id)
+    own_count = len(st.session_state.db.get_messages(st.session_state.current_conversation_id))
+    if conv.get("forked_from_conversation_id") and own_count == 0:
+        st.caption("🌿 *Rama sin mensajes propios — mostrando contexto heredado de la conversación madre.*")
+        
     # 3. Barra de herramientas superior (extraída en ui/toolbar.py)
     uploaded_files, api_key_ok = render_toolbar()
     if not api_key_ok:
@@ -111,7 +150,7 @@ def main():
                 "interrupted_at": datetime.now().isoformat(),
                 "reformulation_count": st.session_state.reformulation_count
             })
-            st.session_state.db.save_message(st.session_state.current_conversation_id, st.session_state.messages[-1])
+            st.session_state.messages[-1]["id"] = st.session_state.db.save_message( st.session_state.current_conversation_id, st.session_state.messages[-1] )
             st.session_state.tokens_wasted += len(st.session_state.partial_response) // 4
             st.session_state.partial_response = ""
 
@@ -122,7 +161,7 @@ def main():
             user_msg["files"] = file_metadata
         st.session_state.messages.append(user_msg)
         st.session_state.last_user_message = original_prompt
-        st.session_state.db.save_message(st.session_state.current_conversation_id, {"role": "user", "content": final_prompt})
+        user_msg["id"] = st.session_state.db.save_message( st.session_state.current_conversation_id, {"role": "user", "content": final_prompt})
 
         # --- RAG retrieval ---
         rag_context = ""
@@ -196,7 +235,7 @@ def main():
                     "truncated": False,
                     "reformulation_count": st.session_state.reformulation_count if is_reformulation else 0
                 })
-                st.session_state.db.save_message(st.session_state.current_conversation_id, st.session_state.messages[-1])
+                st.session_state.messages[-1]["id"] = st.session_state.db.save_message(st.session_state.current_conversation_id, st.session_state.messages[-1])
 
                 st.session_state.last_assistant_response = full_response
                 st.session_state.partial_response = ""

@@ -456,8 +456,8 @@ class ChatDatabase:
 
     # ========== MENSAJES ==========
 
-    def save_message(self, conversation_id: int, message: Dict):
-        """Guarda un mensaje en la conversación"""
+    def save_message(self, conversation_id: int, message: Dict) -> int:
+        """Guarda un mensaje en la conversación. Retorna el id insertado."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -471,10 +471,10 @@ class ChatDatabase:
                 1 if message.get("truncated", False) else 0,
                 message.get("interrupted_at"),
                 message.get("reformulation_count"),
-                message.get("parent_message_id")   # ← NUEVO
+                message.get("parent_message_id")
             ))
+            new_id = cursor.lastrowid          # ← capturar antes del UPDATE
 
-            # Actualizar contador y timestamp de la conversación
             cursor.execute('''
                 UPDATE conversations 
                 SET message_count = message_count + 1,
@@ -483,6 +483,7 @@ class ChatDatabase:
             ''', (conversation_id,))
 
             conn.commit()
+            return new_id                       # ← devolver
 
     def get_messages(self, conversation_id: int) -> List[Dict]:
         """Obtiene todos los mensajes de una conversación"""
@@ -575,10 +576,38 @@ class ChatDatabase:
     def delete_last_turn(self, conversation_id: int) -> bool:
         """Elimina el último turno (pregunta + respuesta) de una conversación.
 
-        Solo aplica si hay al menos 2 mensajes y el último es de rol 'assistant'.
+        Solo aplica si los dos últimos mensajes son un par (user, assistant).
         Retorna True si se eliminó, False si no aplica.
         """
-        messages = self.get_messages
+        with sqlite3.connect(self.db_path) as conn:
+            # Obtener los dos últimos mensajes de la conversación
+            rows = conn.execute(
+                "SELECT id, role FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 2",
+                (conversation_id,),
+            ).fetchall()
+
+            if len(rows) < 2:
+                return False
+
+            # rows[0] es el más reciente
+            if rows[0][1] != "assistant" or rows[1][1] != "user":
+                return False
+
+            ids_to_delete = [rows[0][0], rows[1][0]]
+
+            cursor = conn.execute(
+                "DELETE FROM messages WHERE id IN (?, ?)",
+                ids_to_delete,
+            )
+            deleted = cursor.rowcount
+
+            conn.execute(
+                "UPDATE conversations SET message_count = MAX(0, message_count - ?) WHERE id = ?",
+                (deleted, conversation_id),
+            )
+            conn.commit()
+
+            return deleted == 2
         
     def delete_messages(self, conversation_id: int):
         """Elimina todos los mensajes de una conversación"""
