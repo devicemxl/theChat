@@ -68,6 +68,7 @@ class ChatDatabase:
         self._migrate_conversations_project_column()
         self._migrate_rag_columns()
         self._migrate_pending_reindex_index()
+        self._migrate_messages_parent_message_id()
 
     def _migrate_projects_table(self):
         """Crea la tabla `projects` si no existe."""
@@ -124,6 +125,22 @@ class ChatDatabase:
                 CREATE INDEX IF NOT EXISTS idx_conversations_pending_reindex
                 ON conversations(pending_reindex)
                 WHERE pending_reindex = 1
+            ''')
+            conn.commit()
+            
+    def _migrate_messages_parent_message_id(self):
+        """Añade `parent_message_id` a messages para cadenas de fork (Fase 1)."""
+        with sqlite3.connect(self.db_path) as conn:
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(messages)")
+            }
+            if 'parent_message_id' not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE messages ADD COLUMN parent_message_id INTEGER"
+                )
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_parent
+                ON messages(parent_message_id)
             ''')
             conn.commit()
 

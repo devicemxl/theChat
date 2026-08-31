@@ -104,16 +104,21 @@ Responde de manera clara, concisa y precisa."""
 def stream_deepseek_completion(
     messages: List[Dict],
     api_key: str,
-    model: str = "deepseek-reasoner", # "deepseek-chat"
+    model: str = "deepseek-chat",
     reasoning_effort: Optional[str] = None,
 ) -> Generator[str, None, None]:
     """Streaming para la API de DeepSeek.
 
-    `reasoning_effort` acepta valores en español ('bajo'/'medio'/'alto') que se
-    mapean al estándar de la API ('low'/'medium'/'high'). Solo aplica a modelos
-    con capacidad de razonamiento (deepseek-reasoner y similares); en modelos
-    chat regulares la API lo ignora sin fallar.
+    `reasoning_effort` acepta valores en español ('bajo'/'medio'/'alto').
+    Si el esfuerzo es 'alto', el modelo se cambia automáticamente a
+    `deepseek-reasoner`; para 'bajo'/'medio' se usa `deepseek-chat` (más
+    rápido y económico).
     """
+    if reasoning_effort == "alto":
+        model = "deepseek-reasoner"
+    elif model != "deepseek-reasoner":
+        model = "deepseek-chat"
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"

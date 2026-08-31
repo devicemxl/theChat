@@ -25,26 +25,72 @@ import hnswlib
 # Schema
 # ---------------------------------------------------------------------------
 
-SCHEMA_SQL = """
+SCHEMA_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS rag_chunks (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id   INTEGER NOT NULL,
-    text_link    TEXT    NOT NULL,
-    text         TEXT    NOT NULL,
-    embedding    BLOB    NOT NULL,
-    tags         TEXT    NOT NULL DEFAULT '[]',
-    content_hash TEXT    DEFAULT NULL,
-    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id         INTEGER NOT NULL,
+    text_link          TEXT    NOT NULL,
+    text               TEXT    NOT NULL,
+    embedding          BLOB    NOT NULL,
+    tags               TEXT    NOT NULL DEFAULT '[]',
+    content_hash       TEXT    DEFAULT NULL,
+    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- Campos ampliados tKE (Fase 0)
+    kind               TEXT    NOT NULL DEFAULT 'document',
+    status             TEXT    NOT NULL DEFAULT 'indexed',
+    source_path        TEXT,
+    source_message_id  INTEGER,
+    parent_message_id  INTEGER,
+    narrativa          TEXT
 );
+"""
+
+SCHEMA_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_project ON rag_chunks(project_id);
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_link    ON rag_chunks(text_link);
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_hash    ON rag_chunks(content_hash);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_kind    ON rag_chunks(kind);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_status  ON rag_chunks(status);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_source_message ON rag_chunks(source_message_id);
 """
+
+def migrate_rag_chunks(conn: sqlite3.Connection) -> None:
+    """Migra `rag_chunks` a nivel de columnas (idempotente).
+
+    Si la tabla ya existe sin las columnas ampliadas, las añade con defaults
+    seguros para no romper filas existentes.
+    """
+    existing_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(rag_chunks)")
+    }
+
+    alterations = {
+        "kind": "ALTER TABLE rag_chunks ADD COLUMN kind TEXT NOT NULL DEFAULT 'document'",
+        "status": "ALTER TABLE rag_chunks ADD COLUMN status TEXT NOT NULL DEFAULT 'indexed'",
+        "source_path": "ALTER TABLE rag_chunks ADD COLUMN source_path TEXT",
+        "source_message_id": "ALTER TABLE rag_chunks ADD COLUMN source_message_id INTEGER",
+        "parent_message_id": "ALTER TABLE rag_chunks ADD COLUMN parent_message_id INTEGER",
+        "narrativa": "ALTER TABLE rag_chunks ADD COLUMN narrativa TEXT",
+    }
+
+    for col, ddl in alterations.items():
+        if col not in existing_cols:
+            conn.execute(ddl)
+
+    conn.commit()
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Crea la tabla `rag_chunks` y sus índices si no existen."""
-    conn.executescript(SCHEMA_SQL)
+    """Crea la tabla `rag_chunks` (o actualiza su esquema) e índices.
+
+    Orden correcto para tablas existentes:
+      1. CREATE TABLE IF NOT EXISTS (no-op si ya existe)
+      2. migrate_rag_chunks → añade columnas que falten (kind, status, etc.)
+      3. CREATE INDEX → ya pueden referenciar las columnas nuevas
+    """
+    conn.executescript(SCHEMA_TABLE_SQL)
+    migrate_rag_chunks(conn)
+    conn.executescript(SCHEMA_INDEXES_SQL)
     conn.commit()
 
 
@@ -75,6 +121,12 @@ def insert_atomic(
     vec: np.ndarray,
     dim: int,
     content_hash: str | None = None,
+    kind: str = "document",
+    status: str = "indexed",
+    source_path: str | None = None,
+    source_message_id: int | None = None,
+    parent_message_id: int | None = None,
+    narrativa: str | None = None,
 ) -> int:
     """
     Inserta un chunk (embedding, link, texto, tags, project_id) en SQLite
@@ -110,9 +162,11 @@ def insert_atomic(
     try:
         cursor = conn.execute(
             "INSERT INTO rag_chunks "
-            "(project_id, text_link, text, embedding, tags, content_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (project_id, text_link, text, emb_blob, tags_json, content_hash),
+            "(project_id, text_link, text, embedding, tags, content_hash, "
+            "kind, status, source_path, source_message_id, parent_message_id, narrativa) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, text_link, text, emb_blob, tags_json, content_hash,
+             kind, status, source_path, source_message_id, parent_message_id, narrativa),
         )
         rowid = cursor.lastrowid
 
