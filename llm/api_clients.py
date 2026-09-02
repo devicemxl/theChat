@@ -66,9 +66,7 @@ def build_context_with_reformulation_awareness(
         # El proyecto tomó control: se respeta su prompt tal cual.
         system_prompt = project_system_prompt
     else:
-        system_prompt = """Eres un asistente experto y útil.
-Si el usuario pide una reformulación, prioriza la nueva versión de la pregunta.
-Responde de manera clara, concisa y precisa."""
+        system_prompt = """Eres un asistente experto y útil. Si el usuario pide una reformulación, prioriza la nueva versión de la pregunta.\nResponde de manera clara, concisa y precisa."""
 
         if is_reformulation:
             system_prompt += f"""
@@ -82,11 +80,12 @@ Responde de manera clara, concisa y precisa."""
     if rag_context:
         system_prompt += f"""
 
-        Contexto recuperado de documentos del proyecto:
+        Contexto recuperado de la KB del proyecto:
         {rag_context}
 
+        
         Usa este contexto como referencia prioritaria.
-        Si el contexto es insuficiente, dilo explícitamente.
+        Si el contexto es insuficiente, dilo explícitamente.\n
         """
 
     context.append({"role": "system", "content": system_prompt})
