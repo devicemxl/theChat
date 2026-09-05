@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talks - Desktop</title>
+  <!-- Quill CSS & JS -->
+  <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+  <style>
+    /***** RESET & BASE *****/
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    button {
+      background: transparent;
+      color: inherit;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      text-align: inherit;
+    }
+
+    img {
+      display: block;
+      max-width: 100%;
+    }
+
+    :root {
+      --white: #fff;
+      --dark-gray: #333;
+      --main-gray: #ededed;
+      --light-gray: #f7f7f7;
+      --dark-green: #009688;
+      --info-message: rgba(225, 245, 254, .92);
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+      background-color: #f5f5f5;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background-color: rgba(0, 0, 0, 0.2);
+    }
+
+    ::-webkit-scrollbar-track {
+      background-color: rgba(255, 255, 255, 0.08);
+    }
+
+    html {
+      font-size: 1px;
+    }
+
+    /***** UTILITIES *****/
+    .u-flex {
+      display: flex !important;
+    }
+
+    .u-flex-column {
+      flex-direction: column !important;
+    }
+
+    .u-margin-end {
+      margin-right: 10px !important;
+    }
+
+    .u-hide {
+      display: none !important;
+    }
+
+    /***** ICONS *****/
+    .icon-back {
+      transform: scale(1.4);
+      transform-origin: center;
+    }
+
+    .icon-status {
+      filter: grayscale(1) opacity(0.3) invert(1);
+    }
+
+    .icon-silent {
+      filter: grayscale(1) opacity(0.3);
+    }
+
+    .icon-menu {
+      text-align: center;
+    }
+
+    .icon-menu::before {
+      content: "";
+      display: inline-block;
+      vertical-align: middle;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background-color: var(--dark-gray);
+      box-shadow: 0px -6px var(--dark-gray), 0px 6px var(--dark-gray);
+    }
+
+    /***** LAYOUT PRINCIPAL – FLEX *****/
+    .main-grid {
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+      height: calc(100vh - 80px);
+      margin: 40px;
+      box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.06), 0 2px 5px 0 rgba(0, 0, 0, 0.2);
+      background: var(--white);
+    }
+
+    .main-side {
+      min-width: 250px;
+      max-width: 400px;
+      width: 25vw;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--white);
+      border-right: 1px solid #e0e0e0;
+      overflow: hidden;
+      flex-wrap: nowrap;
+      align-items: stretch;
+    }
+
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--white);
+      overflow: hidden;
+    }
+
+    .main-info {
+      flex: 0 0 300px;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--white);
+      border-left: 1px solid #e0e0e0;
+      overflow: hidden;
+    }
+
+    /***** COMPONENTES COMUNES *****/
+    .common-header {
+      display: flex;
+      background-color: #f8d57e;
+      height: 60px;
+      padding: 10px 16px;
+      flex-shrink: 0;
+      align-items: center;
+    }
+
+    .common-header-start {
+      display: flex;
+      margin-right: auto;
+      align-items: center;
+    }
+
+    .common-header-content {
+      margin: auto 15px;
+      line-height: 1.5;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .common-header-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin: 0;
+    }
+
+    .common-header-status {
+      margin: 0;
+      font-size: 12px;
+      opacity: 0.6;
+    }
+
+    .common-nav-list {
+      display: flex;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .common-nav-item {
+      margin-left: 10px;
+    }
+
+    .common-button .icon {
+      display: block;
+      width: 24px;
+      height: 24px;
+      font-size: 18px;
+      text-align: center;
+      filter: grayscale(1) opacity(0.5);
+      transition: 0.2s;
+    }
+
+    .common-button:hover .icon,
+    .common-button:focus .icon {
+      filter: grayscale(1) opacity(1);
+    }
+
+    .profile-image {
+      flex-shrink: 0;
+      display: block;
+      height: 40px;
+      border-radius: 50%;
+    }
+
+    /***** SIDEBAR IZQUIERDA (chats) *****/
+    .common-search {
+      display: flex;
+      flex-shrink: 0;
+      background: var(--light-gray);
+      position: relative;
+      padding: 8px 16px;
+    }
+
+    .common-search::before {
+      content: "🔎";
+      position: absolute;
+      left: 30px;
+      top: 50%;
+      transform: translateY(-50%);
+      filter: grayscale(1) opacity(0.5);
+    }
+
+    .common-search .text-input {
+      flex: 1;
+      padding-left: 50px;
+      height: 44px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      background: var(--white);
+      appearance: none;
+    }
+
+    .common-search .text-input:focus {
+      outline: none;
+    }
+
+    .chats {
+      flex: 1;
+      overflow-y: auto;
+      background-color: var(--white);
+    }
+
+    .chats-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .chats-item {
+      border-bottom: 1px solid #f2f2f2;
+    }
+
+    .chats-item:last-child {
+      border-bottom: 0;
+    }
+
+    .chats-item-button {
+      display: grid;
+      grid-template-columns: 50px 1fr;
+      grid-column-gap: 15px;
+      padding: 0 15px;
+      cursor: pointer;
+      grid-template-areas: "image header" "image content";
+      align-items: center;
+    }
+
+    .chats-item-button * {
+      margin: 2px 0;
+      padding: 0;
+    }
+
+    .chats-item-button:focus {
+      background-color: #ebebeb;
+      outline: none;
+    }
+
+    .chats-item .profile-image {
+      grid-area: image;
+      height: 50px;
+      margin: auto;
+    }
+
+    .chats-item-header {
+      grid-area: header;
+      display: flex;
+      padding-top: 10px;
+    }
+
+    .chats-item-title {
+      flex: 1;
+      font-weight: bold;
+      margin-right: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chats-item-time {
+      font-size: 12px;
+      opacity: 0.6;
+      white-space: nowrap;
+    }
+
+    .chats-item-content {
+      grid-area: content;
+      display: flex;
+      padding-bottom: 10px;
+      align-items: center;
+    }
+
+    .chats-item-last {
+      flex: 1;
+      opacity: 0.6;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      margin: 0;
+    }
+
+    .chats-item-info {
+      display: flex;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .chats-item-info-item {
+      margin-left: 5px;
+    }
+
+    .unread-messsages {
+      display: block;
+      min-width: 20px;
+      padding: 3px;
+      border-radius: 12px;
+      margin: 0 5px;
+      background-color: #3cdf7a;
+      color: var(--white);
+      font-size: 12px;
+      font-weight: bold;
+      text-align: center;
+    }
+
+    .unread-messsages:empty {
+      display: none;
+    }
+
+    /***** ZONA DE MENSAJES (main-content) *****/
+    .messanger {
+      flex: 1;
+      overflow-y: auto;
+      background-color: #e5ddd5;
+      padding: 20px 7%;
+    }
+
+    .messanger-list {
+      display: flex;
+      flex-direction: column;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .common-message {
+      position: relative;
+      width: fit-content;
+      max-width: 75%;
+      padding: 8px;
+      border-radius: 8px;
+      box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+      margin-bottom: 10px;
+    }
+
+    .common-message time {
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.45);
+      float: right;
+      margin-top: 8px;
+    }
+
+    .common-message .status {
+      float: right;
+      padding-right: 10px;
+      text-align: end;
+    }
+
+    .common-message::before {
+      position: absolute;
+      left: -10px;
+      top: 0;
+      content: "";
+      display: block;
+      border: solid;
+      border-width: 0px 16px 16px 0px;
+      border-color: transparent;
+      border-right-color: var(--white);
+    }
+
+    .common-message.is-you {
+      --user-color-message: #cfe9ba;
+      align-self: flex-end;
+      background-color: var(--user-color-message);
+    --user-color-message: #1e1f20;
+    align-self: flex-end;
+    border: 1px solid transparent;
+    background: linear-gradient(rgb(45, 45, 45), rgb(59, 59, 59)), linear-gradient(rgba(235, 231, 254, 0.33), transparent);
+    color: #a3a3a3;
+    border: 1px solid #dddddd2e;
+    }
+
+    .common-message.is-you::before {
+      left: auto;
+      right: -28px;
+      border-width: 0px 16px 16px 16px;
+      border-color: transparent;
+      border-left-color: var(--user-color-message);
+    }
+
+    .common-message.is-you+.is-you::before,
+    .common-message.is-other+.is-other::before {
+      display: none;
+    }
+
+    .common-message.is-time {
+      align-self: center;
+      background-color: var(--info-message);
+      color: rgba(74, 74, 74, 0.88);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .common-message.is-time::before {
+      display: none;
+    }
+
+    /***** CAJA DE TEXTO (con Quill) *****/
+
+    .toggle-input {
+      display: none;
+    }
+
+    .expander-wrapper {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows 0.3s ease;
+    }
+
+    .expander-content {
+      overflow: hidden;
+    }
+
+    .expander-content p {
+      padding: 0 15px 15px 15px;
+      margin: 15px 0 0 0;
+    }
+
+    .toggle-input:checked~.expander-wrapper {
+      grid-template-rows: 1fr;
+    }
+
+    .toggle-input:checked~.expander-header .chevron {
+      transform: rotate(180deg);
+    }
+
+    /***** PANEL DE INFORMACIÓN (main-info) *****/
+    .main-info-content {
+      flex: 1;
+      overflow-y: auto;
+      background-color: var(--light-gray);
+      padding: 20px;
+    }
+
+    .main-info-image {
+      display: block;
+      max-width: 200px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
+    }
+
+    .common-box {
+      background-color: var(--white);
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      margin-bottom: 10px;
+    }
+
+    .common-box p {
+      font-size: 14px;
+      color: #4a4a4a;
+    }
+
+    .section-title {
+      color: var(--dark-green);
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    /***** ÁRBOL DE ARCHIVOS (tree) *****/
+    .tree-container {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-size: 14px;
+      color: #333;
+      user-select: none;
+    }
+
+    .tree-container ul {
+      list-style-type: none;
+      padding-left: 20px;
+      margin: 0;
+      position: relative;
+    }
+
+    .tree-container ul::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 7px;
+      bottom: 0;
+      border-left: 1px solid #ccc;
+    }
+
+    .tree-container li {
+      margin: 0;
+      padding: 5px 0 5px 15px;
+      line-height: 20px;
+      position: relative;
+    }
+
+    .tree-container li::before {
+      content: "";
+      position: absolute;
+      top: 15px;
+      left: 7px;
+      width: 8px;
+      height: 0;
+      border-top: 1px solid #ccc;
+    }
+
+    .tree-container li:last-child::before {
+      background: #fff;
+      height: auto;
+      top: 15px;
+      bottom: 0;
+    }
+
+    .tree-container ul li:last-child::before {
+      border-left: 1px solid #ccc;
+      left: -13px;
+      top: 0;
+      height: 15px;
+    }
+
+    summary {
+      display: block;
+      cursor: pointer;
+      outline: none;
+    }
+
+    summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .folder-title,
+    .file-title {
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .folder-title:hover,
+    .file-title:hover {
+      background-color: #f0f0f0;
+    }
+
+    .folder-title::before {
+      content: "📁";
+    }
+
+    details[open]>summary>.folder-title::before {
+      content: "📂";
+    }
+
+    .file-title::before {
+      content: "📄";
+    }
+
+    /***** OTROS *****/
+    .status {
+      letter-spacing: -14px;
+      filter: grayscale(1);
+    }
+
+    .status.is-seen {
+      filter: grayscale(0);
+    }
+
+    .twitter {
+      display: block;
+      color: #1da1f2;
+    }
+
+    .twitter-user {
+      font-size: 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <section class="main-grid">
+
+    <!-- SIDEBAR IZQUIERDA -->
+    <aside class="main-side">
+      <header class="common-header">
+        <div class="common-header-start">
+          <button class="u-flex js-user-nav">
+            <img class="profile-image" src="logo.png" alt="Standard Tooling">
+            <div class="common-header-content">
+              <h1 class="common-header-title">Talks</h1>
+            </div>
+          </button>
+        </div>
+        <nav class="common-nav">
+          <ul class="common-nav-list">
+            <li class="common-nav-item">
+              <button class="common-button"><span class="icon">🕘</span></button>
+            </li>
+            <li class="common-nav-item">
+              <button class="common-button"><span class="icon icon-status">💬</span></button>
+            </li>
+            <li class="common-nav-item">
+              <button class="common-button"><span class="icon icon-menu" aria-label="menu"></span></button>
+            </li>
+          </ul>
+        </nav>
+      </header>
+
+      <section class="common-search">
+        <input type="search" class="text-input" placeholder="Search a talk">
+      </section>
+
+      <section class="chats">
+        <ul class="chats-list">
+          <!-- Items de chat (se mantienen igual) -->
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.fhfa1-2.fna.fbcdn.net/v/t1.0-1/p100x100/10325799_276849335820343_269039155920934591_n.png?_nc_cat=101&_nc_sid=dbb9e7&_nc_ohc=fxci6qYcSvoAX-bZfj2&_nc_ht=scontent.fhfa1-2.fna&oh=ad1c246e7e4a52c607aafd99ed7217a2&oe=5EEAF8B0"
+                alt="Elad Shechter">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">CSS Masters Israel</h3>
+                <time class="chats-item-time">12:30</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Beside it yo can follow my twitter account: @eladsc</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image" src="https://pbs.twimg.com/profile_images/507217425/rachelbyserge_400x400.jpg"
+                alt="Rachel Bratt Tannenbaum">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Rachel Bratt Tannenbaum</h3>
+                <time class="chats-item-time">12:05</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">When is our next meetup?</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages">1</span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.fhfa1-2.fna.fbcdn.net/v/t1.0-1/p240x240/67203290_10217514133916884_6721473094952681472_o.jpg?_nc_cat=100&_nc_sid=7206a8&_nc_ohc=re-hfG5q_CoAX-R1IpO&_nc_ht=scontent.fhfa1-2.fna&_nc_tp=6&oh=3596c17bfc18e539e8d604b2d106ac51&oe=5EE7B77C"
+                alt="Yanai Edri">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Yanai Edri</h3>
+                <time class="chats-item-time">12:05</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">See you at Yerucham!</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://pbs.twimg.com/profile_images/1117382038238240769/v3zkFNFa_400x400.png"
+                alt="Rotem Lurx Horovitz">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Rotem Lurx Horovitz</h3>
+                <time class="chats-item-time">11:57</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Let's create a juniors meetup</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages">3</span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image" src="http://bit.ly/2HMqGR7" alt="Yehuda Avrashi">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Yehuda Avrashi</h3>
+                <time class="chats-item-time">11:48</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">It was a great plesure for me</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages">1</span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image" src="http://bit.ly/2vVhJCm" alt="Itai Segal">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Itai Segal</h3>
+                <time class="chats-item-time">Yesterday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">The is very nice!</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.fhfa1-2.fna.fbcdn.net/v/t1.0-9/88098818_10219217642444816_3909333207673208832_o.jpg?_nc_cat=107&_nc_sid=09cbfe&_nc_ohc=ehj_VHsfD1IAX_Y9ift&_nc_ht=scontent.fhfa1-2.fna&oh=a7b2660b2b9fe517667e9f4b545f2e75&oe=5EEAE76E"
+                alt="Ronen Mars Bahteev">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Ronen Mars Bahteev</h3>
+                <time class="chats-item-time">Yesterday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Let's do a meetup at Bigpanda</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.fhfa1-1.fna.fbcdn.net/v/t1.0-1/p480x480/68945154_10157466813344784_6338834733429948416_n.jpg?_nc_cat=103&_nc_sid=7206a8&_nc_ohc=cNR0r4cFIgUAX8zz3be&_nc_ht=scontent.fhfa1-1.fna&_nc_tp=6&oh=4a5d70abaca1964b02be832d4cfe9608&oe=5EE8A96C"
+                alt="Alon Gruss">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Alon Gruss</h3>
+                <time class="chats-item-time">Yesterday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Great!</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image" src="http://bit.ly/37UWsGt" alt="Kalo Avi">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Kalo Avi</h3>
+                <time class="chats-item-time">Yesterday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">I have an idea for you</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.ftlv1-2.fna.fbcdn.net/v/t1.0-9/64559952_10157202999688965_7161203821085982720_n.jpg?_nc_cat=110&_nc_sid=174925&_nc_ohc=9r_P7Wc-c2cAX8Dm_s2&_nc_ht=scontent.ftlv1-2.fna&oh=e71d355d78c765711570abe73b7f1ccd&oe=5EF83FE2"
+                alt="Bambi Haber">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Bambi Haber</h3>
+                <time class="chats-item-time">Sunday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">This is awesome!</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.ftlv1-1.fna.fbcdn.net/v/t31.0-1/p480x480/19693620_10155490124643377_7681015883106028225_o.jpg?_nc_cat=101&_nc_sid=7206a8&_nc_ohc=rCDyj2YlBTMAX-XWZBg&_nc_ht=scontent.ftlv1-1.fna&_nc_tp=6&oh=afadddfcf130358025985597b9d68cf4&oe=5EF7D029"
+                alt="Alexey Karash">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Alexey Karash</h3>
+                <time class="chats-item-time">Sunday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Whats up?</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.ftlv1-2.fna.fbcdn.net/v/t1.0-1/c39.0.293.293a/61548973_10216380217710345_2070201909146288128_n.jpg?_nc_cat=103&_nc_sid=7206a8&_nc_ohc=pf7EiIN0TOcAX-LOpBw&_nc_ht=scontent.ftlv1-2.fna&oh=2b68b7b82e2115ba9b9c621bb8b0a6ba&oe=5EF8135C"
+                alt="Ofer Shelly">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Ofer Shelly</h3>
+                <time class="chats-item-time">Saturday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">It was a great talk</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.fhfa1-1.fna.fbcdn.net/v/t1.0-1/p240x240/90769650_10216328789027525_1768456314591117312_n.jpg?_nc_cat=106&_nc_sid=7206a8&_nc_ohc=fjJvGGteAKYAX9k6im5&_nc_ht=scontent.fhfa1-1.fna&_nc_tp=6&oh=e14fad9bc5b2592409d9d4af1c06740f&oe=5EEAC512"
+                alt="Moshe Harush">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Moshe Harush</h3>
+                <time class="chats-item-time">Friday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Open for freelance?</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+          <li class="chats-item">
+            <div class="chats-item-button js-chat-button" role="button" tabindex="0">
+              <img class="profile-image"
+                src="https://scontent.fhfa1-2.fna.fbcdn.net/v/t1.0-1/p240x240/75456831_2576866162543789_1837376370594807808_o.jpg?_nc_cat=100&_nc_sid=7206a8&_nc_ohc=yJMv0hFAm04AX-e7PZh&_nc_ht=scontent.fhfa1-2.fna&_nc_tp=6&oh=a3cd6b3f25e25fd47e4d211d4fda2ea6&oe=5EE87E2B"
+                alt="Guy Sarkinsky">
+              <header class="chats-item-header">
+                <h3 class="chats-item-title">Guy Sarkinsky</h3>
+                <time class="chats-item-time">Friday</time>
+              </header>
+              <div class="chats-item-content">
+                <p class="chats-item-last">Thanks a lot!</p>
+                <ul class="chats-item-info">
+                  <li class="chats-item-info-item u-hide"><span class="icon-silent">🔇</span></li>
+                  <li class="chats-item-info-item"><span class="unread-messsages"></span></li>
+                </ul>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- ZONA CENTRAL (CHAT) -->
+    <main class="main-content">
+      <header class="common-header">
+        <div class="common-header-start">
+          <!-- Botón de regreso (solo móvil) eliminado -->
+          <button class="u-flex js-side-info-button">
+            <img class="profile-image" src="photo.jpg" alt="CSS">
+            <div class="common-header-content">
+              <h2 class="common-header-title">Project Name</h2>
+              <p class="common-header-status">Project description</p>
+            </div>
+          </button>
+        </div>
+        <nav class="common-nav">
+          <ul class="common-nav-list">
+            <li class="common-nav-item">
+              <button class="common-button"><span class="icon">🔎</span></button>
+            </li>
+            <li class="common-nav-item">
+              <button class="common-button"><span class="icon icon-attach">📎</span></button>
+            </li>
+            <!-- Botón de menú (info) eliminado, ya que el panel info siempre está visible -->
+          </ul>
+        </nav>
+      </header>
+
+      <div class="messanger">
+        <ol class="messanger-list">
+          <li class="common-message is-time">
+            <p class="common-message-content">Today</p>
+          </li>
+          <li class="common-message is-you">
+            <span><small>User</small></span>
+            <p class="common-message-content">This is my CSS/HTML Revers Engineering for WhatsApp</p>
+            <span class="status is-seen">✔️✔️</span>
+            <time datetime>14:11</time>
+          </li>
+          <li class="common-message is-you">
+            <span><small>User</small></span>
+            <p class="common-message-content">Just take a look</p>
+            <span class="status is-seen">✔️✔️</span>
+            <time datetime>14:12</time>
+          </li>
+          <li class="common-message is-other">
+            <span><small>BitBot</small></span>
+            <p class="common-message-content">Who are you?</p>
+            <time datetime>14:33</time>
+          </li>
+          <li class="common-message is-you">
+            <span><small>User</small></span>
+            <p class="common-message-content">
+              I’m Elad Shechter, a Web Developer specializing in CSS & HTML design and architecture.<br><br>
+              A bit more about myself:<br>
+              - Writer of various globally known CSS articles<br>
+              - CSS speaker.<br>
+              - Founder of CSS Masters Israel Community<br><br>
+              You can see more of my stuff on my website <a href="https://eladsc.com/" target="_blank">eladsc.com</a>
+            </p>
+            <span class="status is-seen">✔️✔️</span>
+            <time datetime>14:41</time>
+          </li>
+          <li class="common-message is-other">
+            <span><small>BitBot</small></span>
+            <p class="common-message-content">Who's those peoples on the contact list?</p>
+            <time datetime>14:33</time>
+          </li>
+          <li class="common-message is-other">
+            <span><small>BitBot</small></span>
+            <p class="common-message-content">Who's those peoples on the contact list?</p>
+            <time datetime>14:33</time>
+          </li>
+          <li class="common-message is-you">
+            <span><small>User</small></span>
+            <p class="common-message-content">
+              These are friends from our comunity "<a href="https://www.facebook.com/groups/css.masters.israel/"
+                target="_blank">CSS Masters Israel</a>".<br>
+              Beside it we have anoather global comunity channel, called" <a
+                href="https://www.facebook.com/groups/css.master/" target="_blank">CSS Masters</a>", if you love CSS,
+              you are all welcome to join.
+            </p>
+            <span class="status">✔️✔️</span>
+            <time datetime>14:34</time>
+          </li>
+          <li class="common-message is-you">
+            <span><small>User</small></span>
+            <p class="common-message-content">
+              If you want to know how I created reverse engineering to WhatsApp web, you can read my article
+              <a href="https://blog.animaapp.com/reverse-engineering-whatsapp-webs-css-9239293009f4?utm_medium=blog&utm_source=elad-css&utm_content=reverse-whatsapp&utm_campaign=css-reverse"
+                target="_blank">"Reverse Engineering WhatsApp Web's CSS"</a>
+            </p>
+            <span class="status">✔️</span>
+            <time datetime>14:43</time>
+          </li>
+          <li class="common-message is-you">
+            <span><small>User</small></span>
+            <p class="common-message-content">
+              Beside it you can follow me on twitter:<br>
+              <a class="twitter" href="https://twitter.com/eladsc"><span class="twitter-user">@eladsc</span></a>
+            </p>
+            <span class="status">✔️</span>
+            <time datetime>14:43</time>
+          </li>
+        </ol>
+      </div>
+
+      <!-- CAJA DE TEXTO Y EXPANDER -->
+      <div class="message-box-wrapper">
+        <div class="expander-container">
+          <input type="checkbox" id="toggle-expander" class="toggle-input" />
+          <label for="toggle-expander" class="expander-header">
+            Conversación #325 | Mensajes: 6 | Reformulaciones: 3 | Provider: DeepSeek
+            <span class="chevron">▼</span>
+          </label>
+          <div class="expander-wrapper">
+            <div class="expander-content">
+              <p>Aqui van todas las opciones del menu de configuracion del modelo, proyecto, attached files...</p>
+              <div id="toolbar">
+                <button class="ql-bold"></button>
+                <button class="ql-italic"></button>
+                <button class="ql-script" value="sub"></button>
+                <button class="ql-script" value="super"></button>
+                <button class="ql-link"></button>
+                <button class="ql-blockquote"></button>
+                <button class="ql-code-block"></button>
+                <button class="ql-image"></button>
+                <button class="ql-list" value="ordered"></button>
+                <button class="ql-list" value="bullet"></button>
+              </div>
+            </div>
+          </div>
+
+          <div id="txtMsgBox">
+            <div class="text-input" id="message-box" placeholder="Type a message" rows="1"></div>
+            <button id="voice-button" class="common-button"><span class="icon">➤</span></button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- PANEL DE INFORMACIÓN (siempre visible) -->
+    <aside class="main-info">
+      <header class="common-header">
+        <div class="common-header-start">
+          <button class="u-flex js-close-main-info">
+            <img class="profile-image" src="photo.jpg" alt="Info">
+            <div class="common-header-content">
+              <h2 class="common-header-title">Información</h2>
+            </div>
+          </button>
+        </div>
+        <nav class="common-nav">
+          <ul class="common-nav-list">
+            <li class="common-nav-item">
+              <button class="common-button"><span class="icon">✖</span></button>
+            </li>
+          </ul>
+        </nav>
+      </header>
+      <div class="main-info-content">
+        <div class="common-box">
+          <h3 class="section-title">Detalles</h3>
+          <p>Aquí puedes mostrar información adicional del chat, archivos adjuntos, etc.</p>
+        </div>
+        <!-- Árbol de archivos -->
+        <div class="tree-container">
+          <ul>
+            <li>
+              <details open>
+                <summary><span class="folder-title">src</span></summary>
+                <ul>
+                  <li>
+                    <details>
+                      <summary><span class="folder-title">components</span></summary>
+                      <ul>
+                        <li><span class="file-title">Header.js</span></li>
+                        <li><span class="file-title">Footer.js</span></li>
+                        <li><span class="file-title">Sidebar.js</span></li>
+                      </ul>
+                    </details>
+                  </li>
+                  <li>
+                    <details>
+                      <summary><span class="folder-title">assets</span></summary>
+                      <ul>
+                        <li><span class="file-title">logo.png</span></li>
+                        <li><span class="file-title">styles.css</span></li>
+                      </ul>
+                    </details>
+                  </li>
+                  <li><span class="file-title">App.js</span></li>
+                  <li><span class="file-title">index.js</span></li>
+                </ul>
+              </details>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </aside>
+
+  </section>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      // Inicializar Quill
+      const quill = new Quill('#message-box', {
+        theme: 'snow',
+        modules: {
+          toolbar: '#toolbar'
+        }
+      });
+
+      // Manejo de errores en imágenes (fallback)
+      document.querySelectorAll('img').forEach(function (img) {
+        img.onerror = function () {
+          this.src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='50' height='50' viewport='0 0 100 100' style='fill:black;font-size:50px;opacity:0.5;filter:grayscale(1)'><filter id='grayscale'><feColorMatrix type='saturate' values='0.10'/></filter><text y='85%'>👶</text></svg>";
+        };
+      });
+    });
+  </script>
+  <style>
+    body {
+      font-family: Segoe UI, Helvetica Neue, Helvetica, Lucida Grande, Arial, Ubuntu, Cantarell, Fira Sans, sans-serif;
+      font-size: 14px;
+      line-height: 0.9;
+      color: var(--dark-gray);
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(to bottom, #2b2b2b 5px, #2b2b2b 130px, #222 131px, #222 100%);
+      background-repeat: no-repeat;
+      overflow: hidden;
+    }
+
+    /*
+    EXPANDER (configuración) 
+    ============================================
+    */
+    .expander-container {
+      display: flex;
+      padding: 15px;
+      background-color: #f9f9f9;
+      cursor: pointer;
+      user-select: none;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      overflow: hidden;
+      width: 100%;
+    }
+
+    .expander-header {
+      display: flex;
+      justify-content: space-between;
+      padding: 15px;
+      background-color: #f9f9f9;
+      cursor: pointer;
+      font-weight: bold;
+      user-select: none;
+    }
+
+    .chevron {
+      transition: transform 0.3s ease;
+    }
+
+    /*
+    Text Editor
+    ============================================
+    */
+    .ql-toolbar.ql-snow {
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+      font-family: 'Helvetica Neue', 'Helvetica', 'Arial', sans-serif;
+      padding: 8px;
+      border-radius: 8px;
+    }
+
+    #txtMsgBox {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      flex-wrap: nowrap;
+      justify-content: space-between;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      margin-top: 4px;
+    }
+
+    #message-box {
+      background-color: transparent;
+      border: 1px solid transparent;
+      width: 95%;
+    }
+
+    #message-box .ql-editor {
+      padding: 8px 12px;
+      max-height: 25vh;
+      overflow-y: auto;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.0;
+    }
+
+    .message-box-wrapper {
+      background-color: var(--main-gray);
+      padding: 8px;
+      border-top: 1px solid #e0e0e0;
+    }
+
+    .message-box-wrapper .common-button {
+      padding: 8px;
+      align-self: center;
+    }
+
+    .message-box-wrapper .common-button .icon {
+      font-size: 20px;
+    }
+  </style>
+</body>
+
+</html>
