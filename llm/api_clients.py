@@ -3,7 +3,7 @@ import requests
 from typing import List, Dict, Generator, Optional
 
 # ========== CONSTANTES DE MODELOS ==========
-MAX_TOKENS_DEEPSEEK = 8192
+MAX_TOKENS_DEEPSEEK = 24300
 MAX_TOKENS_MISTRAL = 2000
 MAX_TOKENS_GEMINI = None  # Sin límite explícito en Gemini
 MAX_TOKENS_ANTHROPIC = 4096

@@ -127,7 +127,21 @@ def ingest_uploaded_files(uploaded_files, project_id: int) -> dict:
 # Interfaz
 # ---------------------------------------------------------------------------
 
-st.title("🔧 Data & RAG")
+st.title("You")
+
+with st.expander("Preferences & Profile", expanded=False):
+    tagDict = {"Preferences": "How David wants LLM to communicate\nCommunicates primarily in Spanish with English technical terminology mixed in naturally; Works primarily on mobile; Prefers concise, technically precise prose", 
+               "Profile": "Who David is — developer, entrepreneur, and builder of the CogNeu neuro-symbolic AI stack\nName: David\nOccupation: Developer and entrepreneur with a background in electromechanical systems\nWorks in a medical device manufacturing environment\nBuilder of CogNeu (Cognitive Neural Architecture), a neuro-symbolic AI stack\nBackground spanning architecture/urbanism and industrial contracting\nPursuing a Bachelor of Applied Science in Software Development through BYU-Idaho online\nLives in Mexicali\nWorks on multiple interconnected projects under a company called Standard Tooling Co.\nIndustrial contracting background spans electrical, refrigerants, and industrial gases; also networking analysis"}
+    for tag, definition in tagDict.items():
+        col_youTag, col_youDef, col_youDate = st.columns(3)
+        with col_youTag:
+            st.caption(tag)
+        with col_youDef:
+            st.caption(definition)
+        with col_youDate:
+            st.caption("Date")
+            
+st.title("Knowledge Ingestor")
 st.caption(
     "Sube documentos y asócialos a un proyecto. La ingesta genera chunks "
     "semánticos, embeddings y un índice HNSW para búsqueda futura."

@@ -11,6 +11,7 @@ Los chats se asignan a proyectos desde la vista Chat (Fase 3 del refactor).
 Al borrar un proyecto los chats quedan en 'Sin proyecto', nunca se eliminan.
 """
 import sqlite3
+from turtle import clear, color
 import streamlit as st
 
 from database import ChatDatabase
@@ -27,7 +28,7 @@ db: ChatDatabase = st.session_state.db
 
 @st.dialog("Nuevo proyecto")
 def dialog_create():
-    name = st.text_input("Nombre *", placeholder="Ej: Raitec")
+    name = st.text_input("Nombre *", placeholder="Ej: Raites")
     icon = st.text_input(
         "Emoji",
         value="📁",
@@ -72,9 +73,17 @@ def dialog_create():
         if st.button("Cancelar", use_container_width=True, key="dlg_create_cancel"):
             st.rerun()
 
-
-@st.dialog("Editar proyecto")
+@st.dialog("Edit")
 def dialog_edit(project: dict):
+    # Inject CSS targeting Streamlit's internal modal test IDs
+    st.html("""
+        <style>
+        div[data-testid="stDialog"] div[role="dialog"] {
+            width: 80vw !important; /* Forces the dialog to take up 80% of viewport width */
+            max-width: 1200px;     /* Optional: sets an upper boundary */
+        }
+        </style>
+        """)
     name = st.text_input("Nombre *", value=project["name"])
     icon = st.text_input("Emoji", value=project.get("icon") or "📁", max_chars=4)
 
@@ -124,6 +133,38 @@ def dialog_edit(project: dict):
         if st.button("Cancelar", use_container_width=True, key="dlg_edit_cancel"):
             st.rerun()
 
+@st.dialog("Toughs")
+def dialog_toughs(project: dict):
+    # Inject CSS targeting Streamlit's internal modal test IDs
+    st.html("""
+        <style>
+        div[data-testid="stDialog"] div[role="dialog"] {
+            width: 80vw !important; /* Forces the dialog to take up 80% of viewport width */
+            max-width: 1200px;     /* Optional: sets an upper boundary */
+        }
+        .stTextArea {
+            overflow-y:hidden;
+        }
+        </style>
+        """)
+    st.markdown(
+        f"<div style='background:{color};height:20px;border-radius:4px;margin-bottom:12px;'>You</div>",
+        unsafe_allow_html=True
+    )
+    tagDict = {"Summary": "cogneu — CogNeu: a closed, auditable neutrosophic cognitive architecture and its encyclopedia corpus.",
+               "Architecture Decisions": "CogNeu ADRs, load-bearing architectural principles, and the technical stack — read before touching any layer boundary or logic choice\n\n", 
+               "Principles": "A Git-first architecture for knowledge storage enables a key differentiator: semantic time-travel queries at near-zero additional cost.\nConsistent documentation structure across ecosystem components (problem statement, architecture, use cases, competitive positioning, roadmap) helps establish a coherent product identity.",
+               "Design Patterns": "CogNeu Design Patterns, the reusable solutions to common problems in the architecture\n\n",
+               "Approach": "David works at the intersection of architecture design and documentation — conversations blend technical implementation details with product vision and positioning.\n\nPrefers comprehensive, structured artifacts (README.md, vision docs) that consolidate prior context.\n\nUses reference documents from existing components (e.g. Bealach) as templates when documenting new ones (e.g. trunKV), to keep the ecosystem consistent.","Thinks": "As ecosystem, individual components are designed with clear interfaces and roles relative to the whole",
+               }
+    for tag, definition in tagDict.items():
+        col_youTag, col_youDef, col_youDate = st.columns(3)
+        with col_youTag:
+            st.caption(tag)
+        with col_youDef:
+            st.text_area(value=definition, height=75,label=tag,disabled=True, max_chars=20)
+        with col_youDate:
+            st.caption("Date")
 
 @st.dialog("Eliminar proyecto")
 def dialog_delete(project: dict):
@@ -173,7 +214,7 @@ if not projects:
 else:
     for p in projects:
         with st.container(border=True):
-            col_info, col_edit, col_del = st.columns([8, 1, 1])
+            col_info, col_think, col_edit, col_del = st.columns([10, 0.5, 0.5, 0.5])
             with col_info:
                 st.markdown(
                     f"<div style='display:flex;align-items:center;gap:10px;'>"
@@ -191,10 +232,15 @@ else:
                 if p.get("system_prompt"):
                     with st.expander("Ver system prompt"):
                         st.code(p["system_prompt"], language="text")
-
+                        
+            # Ver platica con deepseek:
+            # https://chat.deepseek.com/a/chat/s/035e4297-bc42-4011-b745-d42c17418e8d
+            with col_think:
+                if st.button("💭", key=f"think_{p['id']}", help="Memory", type="secondary"):
+                    dialog_toughs(p)
             with col_edit:
-                if st.button("✏️", key=f"edit_{p['id']}", help="Editar"):
+                if st.button("✏️", key=f"edit_{p['id']}", help="Edit", type="secondary"):
                     dialog_edit(p)
             with col_del:
-                if st.button("🗑️", key=f"del_{p['id']}", help="Eliminar"):
+                if st.button("🗑️", key=f"del_{p['id']}", help="Delete", type="primary"):
                     dialog_delete(p)
