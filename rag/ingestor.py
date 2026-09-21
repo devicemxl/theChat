@@ -190,29 +190,55 @@ def content_hash(text: str) -> str:
 # ELIMINADA
 
 # ---------------------------------------------------------------------------
-# Prompts de DeepSeek
+# Prompts de LLM
 # ---------------------------------------------------------------------------
 
 _PAGE_SYSTEM = (
-    "You process document fragments. For the given text fragment (roughly "
-    "one page), return a JSON object with EXACTLY these keys and no other "
-    "text:\n"
+    "You process a document fragment (roughly one page) and extract "
+    "retrieval-oriented semantic units.\n\n"
+
+    "Return a JSON object with EXACTLY these keys and no other text:\n"
     '  {"units": ["semantic unit 1", "semantic unit 2", ...],'
     '   "page_summary": "concise summary, max 4 sentences",'
-    '   "tags": ["tag1", "tag2", ...]}\n'
-    "units = coherent paragraphs or complete ideas. "
-    "tags = 2-5 concise descriptive labels."
+    '   "tags": ["tag1", "tag2", ...]}\n\n'
+
+    "A semantic unit is a self-contained piece of knowledge that is useful "
+    "when retrieved independently.\n\n"
+
+    "Prefer fewer, richer units over many small units.\n"
+    "Do not split individual sentences, claims, explanations, or examples "
+    "when they belong to the same subject.\n"
+    "Merge related paragraphs that together express one concept, decision, "
+    "argument, mechanism, procedure, or section.\n"
+    "Split only when there is a meaningful change of subject or purpose.\n\n"
+
+    "Preserve important terminology, names, version numbers, dates, "
+    "relationships, section numbers, chapter numbers, and other identifiers "
+    "from the source.\n\n"
+
+    "Each unit must contain enough context to be understandable when "
+    "retrieved without the original page.\n"
+    "Do not invent information that is absent from the source fragment.\n\n"
+
+    "tags = 2-5 concise conceptual labels."
 )
+
 
 _GLOBAL_SYSTEM = (
-    "You produce document-level summaries. Given a list of per-page "
-    "summaries, return a JSON object with EXACTLY these keys and no other "
-    "text:\n"
-    '  {"global_summary": "concise summary, max 6 sentences",'
-    '   "tags": ["tag1", "tag2", ...]}\n'
-    "tags = 2-5 labels describing the overall document."
-)
+    "You produce a document-level summary from the supplied page summaries.\n\n"
 
+    "Return a JSON object with EXACTLY these keys and no other text:\n"
+    '  {"global_summary": "concise summary, max 6 sentences",'
+    '   "tags": ["tag1", "tag2", ...]}\n\n'
+
+    "Synthesize the page summaries into a coherent representation of the "
+    "document. Do not merely concatenate them.\n"
+    "Preserve important document identity information such as title, "
+    "version, date, status, scope, major sections, and important changes.\n"
+    "tags = 2-5 concise conceptual labels."
+
+    "Si vez que es un indice, overview o puede ser un objeto 'autocontenido' entonces no hagas resumen, gurdadlo completo."
+)
 
 def process_page(page_text: str, page_num: int) -> dict:
     """Llama a DeepSeek para extraer unidades, resumen y tags de una página."""
