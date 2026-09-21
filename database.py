@@ -70,6 +70,30 @@ class ChatDatabase:
         self._migrate_pending_reindex_index()
         self._migrate_messages_parent_message_id()
         self._migrate_conversations_fork_columns()   # ← NUEVO
+        self._migrate_messages_agent_columns()      # ← NUEVO
+
+    def _migrate_messages_agent_columns(self):
+        """Añade columnas de metadatos del ciclo agéntico a `messages`.
+
+        - metadata_json: JSON serializado con fuentes, plan rounds, etc.
+        - agent_status:  'completed' | 'max_rounds_reached' | 'max_searches_reached'
+                        | 'parse_failed' | 'empty_plan' | 'interrupted' | 'error'
+        - rounds_used:   entero, rondas de planificación consumidas en el turno.
+        - searches_used: entero, búsquedas ejecutadas en el turno.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(messages)")
+            }
+            if "metadata_json" not in existing_cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT")
+            if "agent_status" not in existing_cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN agent_status TEXT")
+            if "rounds_used" not in existing_cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN rounds_used INTEGER")
+            if "searches_used" not in existing_cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN searches_used INTEGER")
+            conn.commit()
 
     def _migrate_projects_table(self):
         """Crea la tabla `projects` si no existe."""
@@ -486,13 +510,22 @@ class ChatDatabase:
     # ========== MENSAJES ==========
 
     def save_message(self, conversation_id: int, message: Dict) -> int:
-        """Guarda un mensaje en la conversación. Retorna el id insertado."""
+        """Guarda un mensaje en la conversación. Retorna el id insertado.
+
+        Campos opcionales del ciclo agéntico (se persisten como NULL si faltan):
+        - agent_status:  estado final del turno
+        - rounds_used:   rondas de planificación consumidas
+        - searches_used: búsquedas ejecutadas
+        - metadata_json: JSON serializado con fuentes, planes, etc.
+        """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO messages 
-                (conversation_id, role, content, truncated, interrupted_at, reformulation_count, parent_message_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO messages
+                (conversation_id, role, content, truncated, interrupted_at,
+                reformulation_count, parent_message_id,
+                agent_status, rounds_used, searches_used, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 conversation_id,
                 message.get("role", ""),
@@ -500,20 +533,24 @@ class ChatDatabase:
                 1 if message.get("truncated", False) else 0,
                 message.get("interrupted_at"),
                 message.get("reformulation_count"),
-                message.get("parent_message_id")
+                message.get("parent_message_id"),
+                message.get("agent_status"),
+                message.get("rounds_used"),
+                message.get("searches_used"),
+                message.get("metadata_json"),
             ))
-            new_id = cursor.lastrowid          # ← capturar antes del UPDATE
+            new_id = cursor.lastrowid
 
             cursor.execute('''
-                UPDATE conversations 
+                UPDATE conversations
                 SET message_count = message_count + 1,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (conversation_id,))
 
             conn.commit()
-            return new_id                       # ← devolver
-
+            return new_id
+        
     def get_messages(self, conversation_id: int) -> List[Dict]:
         """Obtiene todos los mensajes de una conversación"""
         with sqlite3.connect(self.db_path) as conn:

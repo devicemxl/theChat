@@ -114,6 +114,10 @@ def load_conversation_messages(conversation_id: int) -> List[Dict]:
                 "files": files,
                 "truncated": msg["truncated"],
                 "interrupted_at": msg["interrupted_at"],
+                "agent_status": msg.get("agent_status"),
+                "rounds_used": msg.get("rounds_used"),
+                "searches_used": msg.get("searches_used"),
+                "metadata_json": msg.get("metadata_json"),
                 "reformulation_count": msg.get("reformulation_count") or 0
             })
         else:
@@ -123,6 +127,10 @@ def load_conversation_messages(conversation_id: int) -> List[Dict]:
                 "content": msg["content"],
                 "truncated": msg["truncated"],
                 "interrupted_at": msg["interrupted_at"],
+                "agent_status": msg.get("agent_status"),
+                "rounds_used": msg.get("rounds_used"),
+                "searches_used": msg.get("searches_used"),
+                "metadata_json": msg.get("metadata_json"),
                 "reformulation_count": msg.get("reformulation_count") or 0
             })
     return formatted_messages

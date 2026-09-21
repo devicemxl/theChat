@@ -22,6 +22,27 @@ from llm.api_clients import (
     stream_anthropic_completion,
 )
 
+import json
+import re
+
+from agent.config import (
+    MAX_PLAN_ROUNDS,
+    MAX_SEARCHES_PER_TURN,
+    TOP_N_PER_SEARCH,
+)
+from agent.prompts import AGENT_SYSTEM_PROMPT
+from agent.runner import (
+    run_agent_turn,
+    AgentThinkingStart,
+    AgentPlanLine,
+    AgentSearchStart,
+    AgentSearchResults,
+    AgentSearchSkipped,
+    AgentSearchError,
+    AgentResponseChunk,
+    AgentError,
+    AgentTurnComplete,
+)
 
 # --- Funciones auxiliares ---
 
@@ -58,13 +79,31 @@ def commit_orphan_partial() -> None:
         or st.session_state.get("current_conversation_id")
     )
 
+    # Defensa: si el partial contiene un <PLAN> sin cerrar (el handler murió
+    # a media planificación), el usuario nunca vio ese texto en pantalla.
+    # Lo descartamos para no persistir contenido que no se renderizó.
+    # Un <PLAN> completo también se filtra por la misma razón.
+    partial_visible = re.sub(r"<PLAN>.*?</PLAN>", "", partial, flags=re.DOTALL)
+    partial_visible = re.sub(r"<PLAN>.*", "", partial_visible, flags=re.DOTALL)
+    partial_visible = partial_visible.strip()
+
+    # Si tras filtrar no queda nada, no hay nada que comitear como mensaje.
+    # Solo limpiamos el estado transitorio.
+    if not partial_visible:
+        st.session_state.partial_response = ""
+        st.session_state.partial_conversation_id = None
+        st.session_state.reformulation_count = 0
+        return
+    
     if target_conv is not None:
+
         orphan_msg = {
             "role": "assistant",
             "content": partial,
             "truncated": True,
             "interrupted_at": datetime.now().isoformat(),
             "reformulation_count": st.session_state.get("reformulation_count", 0),
+            "agent_status": "interrupted",     # ← NUEVO
         }
         try:
             orphan_msg["id"] = st.session_state.db.save_message(target_conv, orphan_msg)
@@ -219,26 +258,31 @@ def main():
         )
 
         # --- RAG retrieval ---
-        rag_context = ""
-        rag_sources = []
-        if st.session_state.get("rag_enabled", False) and st.session_state.get("rag_available", False):
-            project_id = active_project["id"] if active_project else None
-            if project_id:
-                retriever = st.session_state.rag_retriever
-                rag_sources = retriever.search(original_prompt, project_id=project_id, top_n=5)
-                if rag_sources:
-                    rag_context = "\n\n---\n\n".join(
-                        f"Fuente: {r['text_link']}\nContenido: {r['text']}"
-                        for r in rag_sources
-                    )
-
         # Mostrar mensaje de usuario
         with st.chat_message("user"):
             render_user_message(user_msg)
 
+        # ------------------------------------------------------------------
+        # Preparar retriever para el ciclo agéntico
+        # ------------------------------------------------------------------
+        retriever = None
+        project_id = None
+        if (
+            st.session_state.get("rag_enabled", False)
+            and st.session_state.get("rag_available", False)
+            and active_project
+        ):
+            retriever = st.session_state.rag_retriever
+            project_id = active_project["id"]
+
+        agent_system_prompt = AGENT_SYSTEM_PROMPT if retriever else None
+
         # Procesar Respuesta del Asistente
         with st.chat_message("assistant"):
+            status_placeholder = st.empty()
+            plan_placeholder = st.empty()
             response_placeholder = st.empty()
+
             full_response = ""
             is_reformulation = detect_reformulation(original_prompt)
 
@@ -252,70 +296,207 @@ def main():
                 is_reformulation,
                 st.session_state.reformulation_count,
                 project_system_prompt=(active_project.get("system_prompt") if active_project else None),
-                rag_context=rag_context,   # <--- RAG
+                agent_system_prompt=agent_system_prompt,
             )
 
-            # Registrar a qué conversación pertenece este stream. Si el usuario
-            # cambia de conversación mid-stream, el partial huérfano se comitea
-            # a esta conversación y no a la nueva.
             st.session_state.partial_conversation_id = st.session_state.current_conversation_id
 
-            try:
-                effort_params = get_effort_params(st.session_state.api_provider, st.session_state.api_brainer)
-
+            # --- stream_fn bound to the current provider ---
+            def _stream_fn(msgs):
+                effort_params = get_effort_params(
+                    st.session_state.api_provider, st.session_state.api_brainer
+                )
                 if st.session_state.api_provider == "DeepSeek":
-                    stream_gen = stream_deepseek_completion(api_messages, st.session_state.api_key, **effort_params)
+                    return stream_deepseek_completion(
+                        msgs, st.session_state.api_key, **effort_params
+                    )
                 elif st.session_state.api_provider == "Mistral AI":
-                    stream_gen = stream_mistral_completion(api_messages, st.session_state.api_key, **effort_params)
+                    return stream_mistral_completion(
+                        msgs, st.session_state.api_key, **effort_params
+                    )
                 elif st.session_state.api_provider == "Anthropic (Claude)":
-                    stream_gen = stream_anthropic_completion(api_messages, st.session_state.api_key, **effort_params)
+                    return stream_anthropic_completion(
+                        msgs, st.session_state.api_key, **effort_params
+                    )
                 else:
-                    stream_gen = stream_gemini_completion(api_messages, st.session_state.api_key, **effort_params)
+                    return stream_gemini_completion(
+                        msgs, st.session_state.api_key, **effort_params
+                    )
 
-                # Iterar el streaming
-                for chunk in stream_gen:
-                    if chunk:
-                        full_response += chunk
+            # --- Acumuladores del turno ---
+            final_text = ""
+            all_sources = []
+            turn_status = "error"
+            rounds_used = 0
+            searches_used = 0
+            plan_lines_by_round: dict[int, list] = {}
+            current_max_rounds = MAX_PLAN_ROUNDS    # ← NUEVO
+
+            try:
+                for event in run_agent_turn(
+                    api_messages=api_messages,
+                    stream_fn=_stream_fn,
+                    retriever=retriever,
+                    project_id=project_id,
+                    max_rounds=MAX_PLAN_ROUNDS,
+                    max_searches=MAX_SEARCHES_PER_TURN,
+                    top_n_per_search=TOP_N_PER_SEARCH,
+                ):
+                    if isinstance(event, AgentThinkingStart):
+                        current_max_rounds = event.max_rounds    # ← Capturar
+                        if event.is_final:
+                            status_placeholder.markdown(
+                                "_🧠 Sintetizando respuesta final..._"
+                            )
+                        else:
+                            status_placeholder.markdown(
+                                f"_🧠 Pensando... Planificando "
+                                f"(ronda {event.round_num}/{event.max_rounds})_"
+                            )
+
+                    elif isinstance(event, AgentPlanLine):
+                        plan_lines_by_round.setdefault(event.round_num, []).append(event)
+                        snippet = event.raw.strip()[:60]
+                        if snippet:
+                            status_placeholder.markdown(
+                                f"_🧠 Pensando... Planificando "
+                                f"(ronda {event.round_num}/{current_max_rounds})_\n\n"   # ← Usar variable
+                                f"`{snippet}`"
+                            )
+
+                    elif isinstance(event, AgentSearchStart):
+                        status_placeholder.markdown(
+                            f"_🔍 Buscando ({event.index}/{event.total}): "
+                            f"`{event.query[:80]}`_"
+                        )
+
+                    elif isinstance(event, AgentSearchResults):
+                        pass
+
+                    elif isinstance(event, AgentSearchSkipped):
+                        if event.reason == "budget_exhausted":
+                            st.caption(
+                                f"⏸ Búsqueda omitida (tope alcanzado): "
+                                f"`{event.query[:60]}`"
+                            )
+
+                    elif isinstance(event, AgentSearchError):
+                        st.warning(f"⚠️ Búsqueda fallida: {event.message}")
+
+                    elif isinstance(event, AgentResponseChunk):
+                        full_response += event.text
                         st.session_state.partial_response = full_response
                         response_placeholder.markdown(full_response + "▌")
 
-                response_placeholder.markdown(full_response)
+                    elif isinstance(event, AgentError):
+                        st.error(f"❌ {event.message}")
 
-                # Mostrar fuentes RAG
-                if rag_sources:
-                    with st.expander(f"📚 Fuentes utilizadas ({len(rag_sources)})", expanded=False):
-                        for r in rag_sources:
-                            st.markdown(f"**Score:** {r['score']:.2f} | **Origen:** `{r['text_link']}`")
+                    elif isinstance(event, AgentTurnComplete):
+                        final_text = event.final_text
+                        all_sources = event.all_sources
+                        turn_status = event.status
+                        rounds_used = event.rounds_used
+                        searches_used = event.searches_used
+
+                # --- Render final del turno ---
+
+                # 1. Limpiar el indicador de estado
+                status_placeholder.empty()
+
+                # 2. Renderizar los planes por ronda (arriba de la respuesta)
+                if plan_lines_by_round:
+                    with plan_placeholder.container():
+                        for rnum in sorted(plan_lines_by_round):
+                            with st.expander(
+                                f"🧠 Ronda {rnum} — plan ejecutado",
+                                expanded=False,
+                            ):
+                                for line_ev in plan_lines_by_round[rnum]:
+                                    if line_ev.task is not None:
+                                        st.markdown(
+                                            f"- 🔍 **{line_ev.task.payload}**"
+                                        )
+                                    elif line_ev.invalid_reason:
+                                        st.markdown(
+                                            f"- ⚠️ `{line_ev.raw.strip()[:80]}` "
+                                            f"— *{line_ev.invalid_reason}*"
+                                        )
+                                    elif line_ev.raw.strip():
+                                        st.markdown(
+                                            f"- `{line_ev.raw.strip()[:80]}`"
+                                        )
+
+                # 3. Respuesta final
+                response_placeholder.markdown(final_text)
+
+                # 4. Fuentes RAG (dedup por id)
+                if all_sources:
+                    seen_ids = set()
+                    unique_sources = []
+                    for r in all_sources:
+                        rid = r.get("id")
+                        if rid in seen_ids:
+                            continue
+                        seen_ids.add(rid)
+                        unique_sources.append(r)
+
+                    with st.expander(
+                        f"📚 Fuentes utilizadas ({len(unique_sources)})",
+                        expanded=False,
+                    ):
+                        for r in unique_sources:
+                            st.markdown(
+                                f"**Score:** {r['score']:.2f} | "
+                                f"**Origen:** `{r['text_link']}`"
+                            )
                             st.write(r["text"][:500])
 
-                # Guardar respuesta final
-                st.session_state.messages.append({
+                # 5. Persistir el mensaje con metadatos
+                metadata = {
+                    "sources": [
+                        {
+                            "id": r.get("id"),
+                            "text_link": r.get("text_link"),
+                            "score": r.get("score"),
+                        }
+                        for r in all_sources
+                    ],
+                }
+                final_msg = {
                     "role": "assistant",
-                    "content": full_response,
+                    "content": final_text,
                     "truncated": False,
-                    "reformulation_count": st.session_state.reformulation_count if is_reformulation else 0,
-                })
+                    "reformulation_count": (
+                        st.session_state.reformulation_count if is_reformulation else 0
+                    ),
+                    "agent_status": turn_status,
+                    "rounds_used": rounds_used,
+                    "searches_used": searches_used,
+                    "metadata_json": json.dumps(metadata, ensure_ascii=False),
+                }
+                st.session_state.messages.append(final_msg)
                 st.session_state.messages[-1]["id"] = st.session_state.db.save_message(
                     st.session_state.current_conversation_id,
                     st.session_state.messages[-1],
                 )
 
-                st.session_state.last_assistant_response = full_response
+                st.session_state.last_assistant_response = final_text
 
-                # Limpieza tras éxito
+                # 6. Limpieza
                 st.session_state.partial_response = ""
                 st.session_state.partial_conversation_id = None
                 st.session_state.reformulation_count = 0
 
             except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+                # Red de seguridad: errores de mapping/rendering que no vengan
+                # ya del runner. El runner captura errores del stream_fn.
+                st.error(f"❌ Error inesperado: {str(e)}")
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": f"⚠️ Error al generar respuesta: {str(e)}",
                     "truncated": False,
+                    "agent_status": "error",
                 })
-                # Limpieza de estado transitorio: sin esto, el partial a medio
-                # generar se persiste como turno fantasma en el siguiente mensaje.
                 st.session_state.partial_response = ""
                 st.session_state.partial_conversation_id = None
                 st.session_state.reformulation_count = 0

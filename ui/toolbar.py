@@ -230,15 +230,15 @@ def render_toolbar():
                 
         # --- Toggle RAG ---
         if st.session_state.get("rag_available", False):
-            active_project = st.session_state.db.get_conversation_project(
-                st.session_state.current_conversation_id
-            )
             default_rag = st.session_state.get("rag_enabled", False)
             st.checkbox(
-                "📚 Activar RAG (contexto de documentos)",
+                "📚 Permitir búsqueda en documentos (RAG)",
                 value=default_rag,
                 key="rag_enabled",
-                help="Busca y añade información de los documentos del proyecto a la respuesta.",
+                help=(
+                    "El asistente podrá buscar en los documentos del proyecto "
+                    "cuando lo necesite. Decide autónomamente cuándo hacerlo."
+                ),
             )
 
         st.info(msgX)

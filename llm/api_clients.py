@@ -50,42 +50,52 @@ def build_context_with_reformulation_awareness(
     is_reformulation: bool,
     reformulation_count: int,
     project_system_prompt: Optional[str] = None,
-    rag_context: Optional[str] = None,   # <--- NUEVO
+    rag_context: Optional[str] = None,
+    agent_system_prompt: Optional[str] = None,   # ← NUEVO
 ) -> List[Dict]:
     """Construye el contexto estándar para la API inyectando un System Prompt.
 
-    Si `project_system_prompt` viene definido (no None, no cadena vacía), REEMPLAZA
-    al default por completo, incluyendo la lógica de reformulación. Racional:
-    si un proyecto tiene un prompt del estilo "eres parte de un pipeline, solo
-    responde, no opines", inyectar el hint de reformulación va exactamente contra
-    esa intención. El proyecto tiene la palabra final.
+    Orden de ensamblado:
+      1. agent_system_prompt (protocolo de plan/búsqueda) — siempre primero,
+         si viene definido. Es ortogonal a la personalidad del proyecto.
+      2. project_system_prompt (si existe) o el default genérico.
+      3. Hint de reformulación (solo si aplica y no hay project prompt).
+      4. Contexto RAG pre-fetch (legacy; el ciclo agéntico usa inyección
+         por rondas en lugar de este bloque).
     """
     context = []
+    parts: List[str] = []
+
+    if agent_system_prompt:
+        parts.append(agent_system_prompt)
 
     if project_system_prompt:
-        # El proyecto tomó control: se respeta su prompt tal cual.
-        system_prompt = project_system_prompt
+        parts.append(project_system_prompt)
     else:
-        system_prompt = """Eres un asistente experto y útil. Si el usuario pide una reformulación, prioriza la nueva versión de la pregunta.\nResponde de manera clara, concisa y precisa."""
-
+        default_prompt = (
+            "Eres un asistente experto y útil. Si el usuario pide una "
+            "reformulación, prioriza la nueva versión de la pregunta.\n"
+            "Responde de manera clara, concisa y precisa."
+        )
         if is_reformulation:
-            system_prompt += f"""
+            default_prompt += f"""
 
             ⚠️ El usuario está reformulando su pregunta (intento #{reformulation_count}).
             Mantén la intención original pero mejora la respuesta anterior.
             Aplica los cambios específicos que el usuario solicite.
             """
+        parts.append(default_prompt)
 
-    # --- Inyección de contexto RAG ---
+    system_prompt = "\n\n---\n\n".join(parts)
+
     if rag_context:
         system_prompt += f"""
 
         Contexto recuperado de la KB del proyecto:
         {rag_context}
 
-        
         Usa este contexto como referencia prioritaria.
-        Si el contexto es insuficiente, dilo explícitamente.\n
+        Si el contexto es insuficiente, dilo explícitamente.
         """
 
     context.append({"role": "system", "content": system_prompt})
@@ -93,7 +103,7 @@ def build_context_with_reformulation_awareness(
     for msg in messages:
         context.append({
             "role": msg["role"],
-            "content": msg["content"]
+            "content": msg["content"],
         })
 
     return context
@@ -155,7 +165,7 @@ def stream_deepseek_completion(
                         except json.JSONDecodeError:
                             continue
     except requests.exceptions.RequestException as e:
-        yield f"⚠️ Error de conexión con DeepSeek: {str(e)}"
+        raise RuntimeError(f"Error de conexión con DeepSeek: {e}") from e
 
 
 def stream_mistral_completion(
@@ -203,7 +213,7 @@ def stream_mistral_completion(
                         except json.JSONDecodeError:
                             continue
     except requests.exceptions.RequestException as e:
-        yield f"⚠️ Error de conexión con Mistral: {str(e)}"
+        raise RuntimeError(f"Error de conexión con Mistral: {e}") from e
 
 
 def stream_gemini_completion(
@@ -253,7 +263,7 @@ def stream_gemini_completion(
                         except json.JSONDecodeError:
                             continue
     except requests.exceptions.RequestException as e:
-        yield f"⚠️ Error de conexión con Gemini: {str(e)}"
+        raise RuntimeError(f"Error de conexión con Gemini: {e}") from e
 
 
 def stream_anthropic_completion(
@@ -329,7 +339,8 @@ def stream_anthropic_completion(
                     break
                 elif event_type == "error":
                     err = json_data.get("error", {})
-                    yield f"⚠️ Error de Anthropic: {err.get('message', 'desconocido')}"
-                    break
+                    raise RuntimeError(
+                        f"Error de Anthropic: {err.get('message', 'desconocido')}"
+                    )
     except requests.exceptions.RequestException as e:
-        yield f"⚠️ Error de conexión con Anthropic: {str(e)}"
+        raise RuntimeError(f"Error de conexión con Anthropic: {e}") from e

@@ -12,14 +12,32 @@ EXCLUDED_DIRS = DEFAULT_EXCLUDES
 # Extensiones de archivo que el agente puede leer/escribir (texto plano).
 ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS  # importado de utils.extensions
 
-# Límite de iteraciones del ciclo agéntico.
-MAX_ITERATIONS = 10
-
-# Máximo número de resultados devueltos por herramientas de exploración.
-MAX_RESULTS = 50
-
 # Modo por defecto.
 DEFAULT_AGENT_MODE = "chat"   # "chat" o "code"
 
-# Proveedor por defecto para el agente.
+# Proveedor por defecto para el RAG.
 AGENT_PROVIDER = "DeepSeek"
+
+# ---------------------------------------------------------------------------
+# Ciclo agéntico (plan → ejecución → síntesis)
+# ---------------------------------------------------------------------------
+# Tope duro de rondas de planificación por turno. Al alcanzarlo, el runtime
+# fuerza una ronda final sin parser (el modelo solo puede responder).
+MAX_PLAN_ROUNDS = 3
+
+# Tope global de búsquedas por turno, acumulado entre rondas. Al alcanzarlo,
+# las SEARCH adicionales se ignoran y se fuerza síntesis.
+MAX_SEARCHES_PER_TURN = 5
+
+# Número de chunks devueltos por cada SEARCH al retriever.
+TOP_N_PER_SEARCH = 5
+
+# Tope de caracteres del contexto acumulado (histórico + inyecciones de
+# resultados). Si se supera, se descartan los chunks de las rondas más
+# antiguas. Aproximación por chars porque contar tokens requeriría un
+# tokenizador por proveedor.
+MAX_CONTEXT_CHARS = 60000
+
+# Compat: código legado que aún importa MAX_ITERATIONS / MAX_RESULTS.
+# MAX_ITERATIONS = 10
+MAX_RESULTS = 50
