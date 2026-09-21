@@ -1,6 +1,6 @@
 import base64
 import streamlit as st
-import streamlit.components.v1 as components
+#import streamlit.components.v1 as components
 
 def add_copy_button(text: str, key: str):
     """
@@ -109,7 +109,9 @@ def add_copy_button(text: str, key: str):
     
     # 3. Lo inyectamos como un componente nativo de HTML
     # height=35 evita que aparezca una barra de scroll vertical
-    components.html(html_code, height=35)
+    #components.html(html_code, height=35)
+    st.iframe(html_code, height="content")
+
 
 
 def load_custom_css():

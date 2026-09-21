@@ -183,9 +183,11 @@ def run_agent_turn(
         state.status = "max_rounds_reached"
         yield from _force_final_response(state, stream_fn)
 
+    unique_sources = _dedupe_sources(state.all_sources)
+
     yield AgentTurnComplete(
         final_text=state.final_text,
-        all_sources=state.all_sources,
+        all_sources=unique_sources,
         rounds_used=state.round_num,
         searches_used=state.searches_used,
         status=state.status,
@@ -392,6 +394,34 @@ def _map_parser_event(ev: object, round_num: int) -> Iterator[object]:
 # ---------------------------------------------------------------------------
 # Injection formatting
 # ---------------------------------------------------------------------------
+
+def _dedupe_sources(sources: list[dict]) -> list[dict]:
+    """Deduplica por `id`, conservando la entrada de mayor score.
+
+    Cuando el agente busca varias veces en un turno, es común que dos rondas
+    devuelvan el mismo chunk con scores distintos (la query cambió). El
+    retriever no garantiza orden, así que el orden de aparición no es señal
+    de calidad. Se conserva el de mayor score para que el expander final
+    refleje el mejor match conocido.
+
+    El orden de inserción se preserva (dict en Python 3.7+ mantiene orden
+    de primera inserción de cada clave, aunque se reasigne el valor).
+
+    Fallback si `id` es None: usa (text_link, prefijo de text) como clave.
+    """
+    best: dict = {}
+    for r in sources:
+        rid = r.get("id")
+        if rid is None:
+            key = (r.get("text_link"), (r.get("text") or "")[:100])
+        else:
+            key = rid
+
+        existing = best.get(key)
+        if existing is None or r.get("score", 0.0) > existing.get("score", 0.0):
+            best[key] = r
+
+    return list(best.values())
 
 def _format_search_injection(
     *,

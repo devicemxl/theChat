@@ -175,6 +175,31 @@ def main():
                 msg_key = f"msg_{st.session_state.current_conversation_id}_{idx}"
                 add_copy_button(msg["content"], msg_key)
 
+            # --- Plan del agente (persistido) ---
+            if msg["role"] == "assistant" and msg.get("metadata_json"):
+                try:
+                    meta = json.loads(msg["metadata_json"])
+                except Exception:
+                    meta = {}
+                plan_rounds = meta.get("plan_rounds") or {}
+                for rnum in sorted(plan_rounds, key=lambda x: int(x)):
+                    lines = plan_rounds[rnum]
+                    if not lines:
+                        continue
+                    with st.expander(f"🧠 Ronda {rnum} — plan ejecutado", expanded=False):
+                        for line in lines:
+                            q = line.get("query")
+                            invalid = line.get("invalid_reason")
+                            raw = (line.get("raw") or "").strip()
+                            if q:
+                                st.markdown(f"- 🔍 **{q}**")
+                            elif invalid:
+                                st.markdown(
+                                    f"- ⚠️ `{raw[:80]}` — *{invalid}*"
+                                )
+                            elif raw:
+                                st.markdown(f"- `{raw[:80]}`")
+
             if msg.get("truncated", False):
                 st.caption("⚠️ *Mensaje truncado*")
 
@@ -280,7 +305,7 @@ def main():
         # Procesar Respuesta del Asistente
         with st.chat_message("assistant"):
             status_placeholder = st.empty()
-            plan_placeholder = st.empty()
+            #plan_placeholder = st.empty()
             response_placeholder = st.empty()
 
             full_response = ""
@@ -343,7 +368,7 @@ def main():
                     top_n_per_search=TOP_N_PER_SEARCH,
                 ):
                     if isinstance(event, AgentThinkingStart):
-                        current_max_rounds = event.max_rounds    # ← Capturar
+                        current_max_rounds = event.max_rounds
                         if event.is_final:
                             status_placeholder.markdown(
                                 "_🧠 Sintetizando respuesta final..._"
@@ -355,14 +380,10 @@ def main():
                             )
 
                     elif isinstance(event, AgentPlanLine):
+                        # Solo acumulamos; el render vive en el historial
+                        # persistido (ver loop de mensajes). Durante el turno
+                        # activo, el status_placeholder ya da feedback suficiente.
                         plan_lines_by_round.setdefault(event.round_num, []).append(event)
-                        snippet = event.raw.strip()[:60]
-                        if snippet:
-                            status_placeholder.markdown(
-                                f"_🧠 Pensando... Planificando "
-                                f"(ronda {event.round_num}/{current_max_rounds})_\n\n"   # ← Usar variable
-                                f"`{snippet}`"
-                            )
 
                     elif isinstance(event, AgentSearchStart):
                         status_placeholder.markdown(
@@ -404,7 +425,7 @@ def main():
                 status_placeholder.empty()
 
                 # 2. Renderizar los planes por ronda (arriba de la respuesta)
-                if plan_lines_by_round:
+                '''if plan_lines_by_round:
                     with plan_placeholder.container():
                         for rnum in sorted(plan_lines_by_round):
                             with st.expander(
@@ -424,27 +445,18 @@ def main():
                                     elif line_ev.raw.strip():
                                         st.markdown(
                                             f"- `{line_ev.raw.strip()[:80]}`"
-                                        )
+                                        )'''
 
                 # 3. Respuesta final
                 response_placeholder.markdown(final_text)
 
-                # 4. Fuentes RAG (dedup por id)
+                # 4. Fuentes RAG (ya deduplicadas por el runner)
                 if all_sources:
-                    seen_ids = set()
-                    unique_sources = []
-                    for r in all_sources:
-                        rid = r.get("id")
-                        if rid in seen_ids:
-                            continue
-                        seen_ids.add(rid)
-                        unique_sources.append(r)
-
                     with st.expander(
-                        f"📚 Fuentes utilizadas ({len(unique_sources)})",
+                        f"📚 Fuentes utilizadas ({len(all_sources)})",
                         expanded=False,
                     ):
-                        for r in unique_sources:
+                        for r in all_sources:
                             st.markdown(
                                 f"**Score:** {r['score']:.2f} | "
                                 f"**Origen:** `{r['text_link']}`"
@@ -461,6 +473,18 @@ def main():
                         }
                         for r in all_sources
                     ],
+                    "plan_rounds": {
+                        str(rnum): [
+                            {
+                                "raw": ev.raw,
+                                "kind": ev.task.kind.value if ev.task else None,
+                                "query": ev.task.payload if ev.task else None,
+                                "invalid_reason": ev.invalid_reason or "",
+                            }
+                            for ev in lines
+                        ]
+                        for rnum, lines in plan_lines_by_round.items()
+                    },
                 }
                 final_msg = {
                     "role": "assistant",
