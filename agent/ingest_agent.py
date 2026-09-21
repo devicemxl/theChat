@@ -47,6 +47,20 @@ class IngestAgent:
                     f"invalid response: kind={output.kind!r} "
                     f"units={len(output.units)} summary={bool(output.summary)}"
                 )
+
+            # Red de seguridad: si el modelo emitió <EMIT_WHOLE> con pocos
+            # units, el whole duplica el contenido. Se descarta.
+            #
+            # Excepción: diagram. Un diagrama siempre vale la pena como whole
+            # aunque el modelo no haya emitido ningún unit — el diagrama solo
+            # tiene sentido completo.
+            if (
+                output.whole
+                and output.kind != "diagram"
+                and len(output.units) < 4
+            ):
+                output.whole = None
+
             return output
         except Exception as e:
             if self.fallback_enabled:

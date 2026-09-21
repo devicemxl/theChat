@@ -30,7 +30,7 @@ MAX_PLAN_ROUNDS = 3
 MAX_SEARCHES_PER_TURN = 5
 
 # Número de chunks devueltos por cada SEARCH al retriever.
-TOP_N_PER_SEARCH = 5
+TOP_N_PER_SEARCH = 10
 
 # Tope de caracteres del contexto acumulado (histórico + inyecciones de
 # resultados). Si se supera, se descartan los chunks de las rondas más

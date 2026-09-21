@@ -71,14 +71,18 @@ Do NOT emit as units:
 Emit at most 20 EMIT_UNIT tags. If the fragment has more logical entries
 than that, group related entries into a single unit.
 
-Then emit the ENTIRE fragment verbatim as one unit ONLY IF the fragment is
-under 3000 characters. Skip this if the fragment is longer.
+Emit <EMIT_WHOLE> ONLY IF both conditions hold:
+  - the fragment is under 3000 characters, AND
+  - you emitted at least 4 EMIT_UNIT tags.
+
+If you emitted 3 or fewer EMIT_UNIT tags, skip <EMIT_WHOLE> — the units
+already contain the fragment content, and emitting both would duplicate it.
 
 > If a section contains subsections marked with ###, emit one unit per subsection in addition to the section-level unit.
 > si una sección contiene subsecciones ###, emitir un unit por subsección además del unit de la sección.
 
 Emit <EMIT_WHOLE> ONLY IF the fragment is under 3000 characters AND you
-emitted at least 3 EMIT_UNIT tags. If you emitted only 1 or 2 EMIT_UNITs,
+emitted at least 4 EMIT_UNIT tags. If you emitted only 1 or 2 EMIT_UNITs,
 skip EMIT_WHOLE — the units already contain the content.
 
 Then emit a short summary explaining what this index is about:

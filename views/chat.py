@@ -200,7 +200,27 @@ def main():
                             elif raw:
                                 st.markdown(f"- `{raw[:80]}`")
 
-            if msg.get("truncated", False):
+            # --- Caption de estado del turno ---
+            agent_status = msg.get("agent_status")
+            rounds_used = msg.get("rounds_used")
+            searches_used = msg.get("searches_used")
+
+            if agent_status == "max_rounds_reached":
+                detail = f" — {rounds_used} rondas" if rounds_used else ""
+                st.caption(f"⚠️ *Tope de rondas alcanzado{detail}*")
+            elif agent_status == "max_searches_reached":
+                detail = f" — {searches_used} búsquedas" if searches_used else ""
+                st.caption(f"⚠️ *Tope de búsquedas alcanzado{detail}*")
+            elif agent_status == "parse_failed":
+                st.caption("⚠️ *Protocolo de planificación roto — se guardó la salida cruda*")
+            elif agent_status == "empty_plan":
+                st.caption("⚠️ *El plan no contenía tareas ejecutables*")
+            elif agent_status == "error":
+                st.caption("❌ *Error durante la generación*")
+            elif agent_status == "interrupted":
+                st.caption("⚠️ *Generación interrumpida*")
+            elif msg.get("truncated", False):
+                # Fallback para mensajes viejos sin agent_status.
                 st.caption("⚠️ *Mensaje truncado*")
 
             if (msg.get("reformulation_count") or 0) > 0:
