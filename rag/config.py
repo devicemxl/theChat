@@ -51,7 +51,7 @@ RAG_PACK_JSON   = Path(_get_env_or_secret("RAG_PACK_JSON", str(BASE_DIR / "model
 # ---------------------------------------------------------------------------
 # Parámetros del motor
 # ---------------------------------------------------------------------------
-RAG_TARGET_DIM    = int(_get_env_or_secret("RAG_TARGET_DIM", "512"))
+RAG_TARGET_DIM    = int(_get_env_or_secret("RAG_TARGET_DIM", "256"))
 RAG_CHUNK_SIZE    = int(_get_env_or_secret("RAG_CHUNK_SIZE", "40000"))
 RAG_CHUNK_OVERLAP = int(_get_env_or_secret("RAG_CHUNK_OVERLAP", "500"))
 

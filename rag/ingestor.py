@@ -293,19 +293,17 @@ _PAGE_SYSTEM = (
 
 
 _GLOBAL_SYSTEM = (
-    "You produce a document-level summary from the supplied page summaries.\n\n"
-
+    "You produce a document-level summary from the supplied fragment summaries.\n\n"
     "Return a JSON object with EXACTLY these keys and no other text:\n"
     '  {"global_summary": "concise summary, max 6 sentences",'
     '   "tags": ["tag1", "tag2", ...]}\n\n'
-
-    "Synthesize the page summaries into a coherent representation of the "
-    "document. Do not merely concatenate them.\n"
-    "Preserve important document identity information such as title, "
-    "version, date, status, scope, major sections, and important changes.\n"
-    "tags = 2-5 concise conceptual labels."
-
-    "Si vez que es un indice, overview o puede ser un objeto 'autocontenido' entonces no hagas resumen, gurdadlo completo."
+    "Synthesize the fragment summaries into a coherent representation of the "
+    "document. Do not concatenate them.\n"
+    "Preserve document identity: title, version, date, status, scope, major "
+    "sections, important changes.\n"
+    "If the fragment summaries include metadata (version, date, maintainer), "
+    "include those values explicitly in the summary.\n"
+    "tags = 2-5 concise conceptual labels, lowercase."
 )
 
 def process_page(page_text: str, page_num: int) -> dict:

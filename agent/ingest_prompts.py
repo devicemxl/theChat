@@ -27,6 +27,10 @@ Your response must contain, in this order:
 
 No text outside tags. No markdown. No prose.
 
+- If a fragment is a metadata/frontmatter block, list its key values
+  explicitly in EMIT_SUMMARY (version, date, status, author, scope). Do
+  not describe them generically.
+
 ## Classification
 
 - index:   A table of contents, an outline, a list of chapters/sections,
@@ -202,4 +206,21 @@ Response:
 <EMIT_SUMMARY>Descripción del proceso de fotosíntesis: definición, localización celular y las dos fases que lo componen.</EMIT_SUMMARY>
 <EMIT_TAGS>fotosíntesis, biología, plantas, metabolismo</EMIT_TAGS>
 <DONE/>
+
+
+
+If a fragment contains a frontmatter or metadata block (key-value table,
+often fenced with ---), your EMIT_SUMMARY MUST mention the values it
+contains explicitly: title, version, date, status, maintainer, author, or
+similar. Treat that metadata as authoritative context for the whole
+document.
+
+Example:
+Frontmatter contains: tipo=índice maestro, versión=1.0, fecha=2026-05-03,
+mantenedor=David.
+Good summary: "Fragmento de cabecera de copiaDelindexGlobalCogneu.md, índice
+maestro de la Enciclopedia CogNeu. Versión 1.0, estado consolidado, fecha
+2026-05-03, mantenedor David."
+Bad summary: "Fragmento de cabecera de un documento que contiene metadatos."
+
 """
