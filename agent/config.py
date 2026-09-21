@@ -41,3 +41,20 @@ MAX_CONTEXT_CHARS = 60000
 # Compat: código legado que aún importa MAX_ITERATIONS / MAX_RESULTS.
 # MAX_ITERATIONS = 10
 MAX_RESULTS = 50
+
+# ---------------------------------------------------------------------------
+# Agente de ingesta (clasificación + troceo por tipo)
+# ---------------------------------------------------------------------------
+# Si el LLM falla el protocolo, indexar el fragmento crudo como un solo
+# unit en lugar de abortar la ingesta. Preferimos un chunk mediocre a
+# perder el documento entero.
+INGEST_FALLBACK_ON_ERROR = True
+
+# Tope de seguridad por fragmento: si el modelo emite más de N units
+# (comportamiento anómalo), se truncan. Evita que un documento se parta
+# en 500 chunks por un mal output.
+INGEST_MAX_UNITS_PER_FRAGMENT = 200
+
+# Tope de tokens de salida para la llamada de ingesta. Los fragmentos
+# clasificados como index pueden generar muchos tags EMIT_UNIT.
+INGEST_MAX_OUTPUT_TOKENS = 8000

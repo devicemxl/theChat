@@ -55,6 +55,13 @@ from rag.store import (
     rebuild_index_from_db,  # nueva
 )
 
+from agent.config import (
+    INGEST_FALLBACK_ON_ERROR,
+    INGEST_MAX_UNITS_PER_FRAGMENT,
+    INGEST_MAX_OUTPUT_TOKENS,
+)
+from agent.ingest_agent import IngestAgent
+
 # ---------------------------------------------------------------------------
 # Cliente DeepSeek
 # ---------------------------------------------------------------------------
@@ -88,14 +95,24 @@ def _get_deepseek_key() -> str:
         )
     return key
 
+def _call_deepseek_for_ingest(messages: list[dict]) -> str:
+    """Llamada no-JSON a DeepSeek para el agente de ingesta.
+
+    El output es tag-based, no JSON, así que json_mode=False. El tope de
+    tokens es más alto que el default porque los fragmentos clasificados
+    como index emiten muchas líneas EMIT_UNIT.
+    """
+    return call_deepseek(
+        messages,
+        temperature=0.0,
+        json_mode=False,
+        max_tokens=INGEST_MAX_OUTPUT_TOKENS,
+    )
 
 def call_deepseek(messages: List[dict],
                   temperature: float = 0.0,
-                  json_mode: bool = True) -> str:
-    """
-    Llama a DeepSeek con reintentos y timeout.
-    Si json_mode=True, pide explícitamente response_format json_object.
-    """
+                  json_mode: bool = True,
+                  max_tokens: int = 2048) -> str:
     headers = {
         "Authorization": f"Bearer {_get_deepseek_key()}",
         "Content-Type": "application/json",
@@ -104,7 +121,7 @@ def call_deepseek(messages: List[dict],
         "model":       DEEPSEEK_MODEL,
         "messages":    messages,
         "temperature": temperature,
-        "max_tokens":  2048,
+        "max_tokens":  max_tokens,
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
@@ -147,6 +164,57 @@ def normalize_text(raw: str) -> str:
     """Normaliza a NFC, forma usada por SentencePiece de EmbeddingGemma."""
     return unicodedata.normalize("NFC", raw)
 
+def split_by_sections(text: str, max_section_chars: int = 12000) -> List[str]:
+    """Divide un documento en fragmentos por headers markdown de nivel 1.
+
+    Un header de nivel 1 (`# `) o un separador horizontal (`---`) marca un
+    límite natural. Si una sección excede max_section_chars, se subdivide
+    con sliding_windows para que el LLM nunca reciba más de lo que puede
+    procesar en una sola respuesta.
+
+    Si el documento no tiene headers de nivel 1, se aplica sliding_windows
+    directo (comportamiento legacy).
+    """
+    if not text:
+        return []
+
+    # Buscar headers de nivel 1 al inicio de línea. Solo cuentan los que
+    # estén en la columna 0 (no los ### embebidos en texto).
+    lines = text.split("\n")
+    sections: List[str] = []
+    current: List[str] = []
+
+    for line in lines:
+        is_l1_header = line.startswith("# ") and not line.startswith("## ")
+        is_separator = line.strip() == "---" and len(current) > 20  # no partir en frontmatter
+
+        if (is_l1_header or is_separator) and current:
+            chunk = "\n".join(current).strip()
+            # Descartar fragmentos sin contenido real: solo separadores,
+            # solo espacios, o solo la línea "---".
+            if chunk and len(chunk.strip("-\n \t")) > 20:
+                sections.append(chunk)
+            current = [line]
+        else:
+            current.append(line)
+
+    if current:
+        chunk = "\n".join(current).strip()
+        if chunk and len(chunk.strip("-\n \t")) > 20: # Ese len(chunk.strip("-\n \t")) > 20 exige al menos 20 caracteres que no sean guiones, saltos de línea, espacios o tabs. Un fragmento que sea solo ---\n---\n no pasa. Un fragmento con contenido real sí.
+            sections.append(chunk)
+
+    # Si no se detectó ningún header, caer a sliding_windows sobre el todo.
+    if len(sections) <= 1:
+        return sliding_windows(text)
+
+    # Subdividir secciones gigantes.
+    out: List[str] = []
+    for sec in sections:
+        if len(sec) <= max_section_chars:
+            out.append(sec)
+        else:
+            out.extend(sliding_windows(sec))
+    return out
 
 def sliding_windows(text: str) -> List[str]:
     """Divide `text` en ventanas deslizantes de CHUNK_SIZE con OVERLAP."""
@@ -411,6 +479,12 @@ def ingest_documents(
 
         base_tags = base_tags or []
 
+        # Agente de ingesta
+        ingest_agent = IngestAgent(
+            llm_call=_call_deepseek_for_ingest,
+            fallback_enabled=INGEST_FALLBACK_ON_ERROR,
+        )
+
         for file_idx, (data, filename) in enumerate(files, start=1):
             if progress_callback:
                 progress_callback(file_idx, len(files), f"Procesando {filename}")
@@ -440,29 +514,50 @@ def ingest_documents(
                 stats["skipped"] += 1
                 continue
 
-            # 4. Dividir en ventanas
-            windows = sliding_windows(text)
-            print(f"  [RAG] {len(windows)} ventanas de ~{CHUNK_SIZE} caracteres")
+            # 4. Dividir en secciones (fallback a sliding_windows si no hay
+            #    headers de nivel 1).
+            windows = split_by_sections(text, max_section_chars=12000)
+            print(f"  [RAG] {len(windows)} fragmento(s) a procesar")
 
             # Tags base: combinación de base_tags y extensión del archivo
             ext = Path(filename).suffix.lower().lstrip(".")
             base_tags_for_doc = base_tags + ([ext] if ext else [])
 
-            page_summaries: List[str] = []
+            fragment_summaries: List[str] = []
             unit_counter = 0
 
-            for page_num, window in enumerate(windows, start=1):
-                # 5. Procesar página con DeepSeek
-                page = process_page(window, page_num)
-                units = page["units"]
-                page_summaries.append(page["page_summary"])
-                page_tags = normalize_tags(base_tags_for_doc + page["tags"])
-                print(f"    página {page_num}: {len(units)} unidades, tags={page['tags']}")
+            for win_idx, window in enumerate(windows, start=1):
+                if progress_callback:
+                    progress_callback(
+                        file_idx, len(files),
+                        f"{filename} — ventana {win_idx}/{len(windows)}",
+                    )
 
-                # Insertar cada unidad semántica
-                for unit_text in units:
+                # 5. Clasificar y trocear con el agente
+                output = ingest_agent.process(window, filename)
+                print(
+                    f"    ventana {win_idx}: kind={output.kind}, "
+                    f"{len(output.units)} units, "
+                    f"whole={'yes' if output.whole else 'no'}, "
+                    f"tags={output.tags}"
+                )
+
+                # Aplicar tope de seguridad
+                units = output.units[:INGEST_MAX_UNITS_PER_FRAGMENT]
+                if len(output.units) > INGEST_MAX_UNITS_PER_FRAGMENT:
+                    print(
+                        f"      ⚠ truncado de {len(output.units)} a "
+                        f"{INGEST_MAX_UNITS_PER_FRAGMENT} units"
+                    )
+
+                # Combinar tags: los del agente + los base del doc
+                merged_tags = normalize_tags(base_tags_for_doc + output.tags)
+
+                # Insertar unidades
+                for u_idx, unit_text in enumerate(units, start=1):
                     unit_counter += 1
-                    link = f"{filename}#unidad{unit_counter}"
+                    kind = f"{output.kind}_unit"
+                    link = f"{filename}#{kind}_{win_idx}_{u_idx}"
                     try:
                         vec = engine.embed_document(unit_text)
                         insert_atomic(
@@ -470,61 +565,96 @@ def ingest_documents(
                             project_id=project_id,
                             text_link=link,
                             text=unit_text,
-                            tags=page_tags,
+                            tags=merged_tags,
                             vec=vec,
                             dim=dim,
                             content_hash=content_hash(unit_text),
+                            kind=kind,
+                            source_path=filename,
                         )
                         stats["inserted"] += 1
                     except Exception as e:
                         stats["failed"] += 1
-                        print(f"      unidad FAIL: {e}")
+                        print(f"      {kind} FAIL: {e}")
 
-                # Insertar resumen de página
-                page_link = f"{filename}#pagina{page_num}"
+                # Insertar whole (si aplica — solo index y diagram)
+                if output.whole:
+                    kind = f"{output.kind}_whole"
+                    link = f"{filename}#{kind}_{win_idx}"
+                    try:
+                        vec = engine.embed_document(output.whole)
+                        insert_atomic(
+                            conn, index,
+                            project_id=project_id,
+                            text_link=link,
+                            text=output.whole,
+                            tags=merged_tags,
+                            vec=vec,
+                            dim=dim,
+                            content_hash=content_hash(output.whole),
+                            kind=kind,
+                            source_path=filename,
+                        )
+                        stats["inserted"] += 1
+                    except Exception as e:
+                        stats["failed"] += 1
+                        print(f"      {kind} FAIL: {e}")
+
+                # Insertar resumen del fragmento
+                if output.summary:
+                    kind = f"{output.kind}_summary"
+                    link = f"{filename}#{kind}_{win_idx}"
+                    try:
+                        vec = engine.embed_document(output.summary)
+                        insert_atomic(
+                            conn, index,
+                            project_id=project_id,
+                            text_link=link,
+                            text=output.summary,
+                            tags=merged_tags,
+                            vec=vec,
+                            dim=dim,
+                            content_hash=content_hash(output.summary),
+                            kind=kind,
+                            source_path=filename,
+                        )
+                        stats["inserted"] += 1
+                    except Exception as e:
+                        stats["failed"] += 1
+                        print(f"      {kind} FAIL: {e}")
+
+                    fragment_summaries.append(output.summary)
+
+            # 6. Resumen global del documento (solo si hay 2+ ventanas)
+            if len(windows) > 1 and fragment_summaries:
+                print("  [RAG] Generando resumen global...")
+                doc_info = summarize_document(fragment_summaries)
+                combined_tags = normalize_tags(base_tags_for_doc + doc_info["tags"])
                 try:
-                    vec = engine.embed_document(page["page_summary"])
+                    vec = engine.embed_document(doc_info["global_summary"])
                     insert_atomic(
                         conn, index,
                         project_id=project_id,
-                        text_link=page_link,
-                        text=page["page_summary"],
-                        tags=page_tags,
+                        text_link=filename,
+                        text=doc_info["global_summary"],
+                        tags=combined_tags,
                         vec=vec,
                         dim=dim,
-                        content_hash=content_hash(page["page_summary"]),
+                        content_hash=doc_hash,
+                        kind="document_summary",
+                        source_path=filename,
                     )
                     stats["inserted"] += 1
                 except Exception as e:
                     stats["failed"] += 1
-                    print(f"      resumen página FAIL: {e}")
-
-            # 6. Resumen global del documento
-            print("  [RAG] Generando resumen global...")
-            doc_info = summarize_document(page_summaries)
-            combined_tags = normalize_tags(base_tags_for_doc + doc_info["tags"])
-            try:
-                vec = engine.embed_document(doc_info["global_summary"])
-                insert_atomic(
-                    conn, index,
-                    project_id=project_id,
-                    text_link=filename,
-                    text=doc_info["global_summary"],
-                    tags=combined_tags,
-                    vec=vec,
-                    dim=dim,
-                    content_hash=doc_hash,
-                )
-                stats["inserted"] += 1
-            except Exception as e:
-                stats["failed"] += 1
-                print(f"      resumen global FAIL: {e}")
+                    print(f"      resumen global FAIL: {e}")
 
             if progress_callback:
                 progress_callback(
                     file_idx, len(files),
-                    f"Completado {filename}: {unit_counter} unidades"
+                    f"Completado {filename}: {unit_counter} units",
                 )
+
         # 7. Checkpoint final del índice
         print("\n[RAG] Guardando índice HNSW...")
         checkpoint(
