@@ -23,7 +23,7 @@ AGENT_PROVIDER = "DeepSeek"
 # ---------------------------------------------------------------------------
 # Tope duro de rondas de planificación por turno. Al alcanzarlo, el runtime
 # fuerza una ronda final sin parser (el modelo solo puede responder).
-MAX_PLAN_ROUNDS = 3
+MAX_PLAN_ROUNDS = 5
 
 # Tope global de búsquedas por turno, acumulado entre rondas. Al alcanzarlo,
 # las SEARCH adicionales se ignoran y se fuerza síntesis.
